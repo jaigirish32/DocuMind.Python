@@ -4,10 +4,10 @@ from dataclasses import dataclass, field
 
 @dataclass
 class BoundingBox:
-    x: float = 0.0
-    y: float = 0.0
-    width: float = 0.0
-    height: float = 0.0
+    x0:     float = 0.0
+    top:    float = 0.0
+    x1:     float = 0.0
+    bottom: float = 0.0
 
 
 @dataclass
