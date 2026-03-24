@@ -8,7 +8,7 @@ from DocuMind.documents.raw.raw_document import RawDocument
 logger = get_logger(__name__)
 
 # ── Default constants ─────────────────────────────────────────────────────────
-DEFAULT_CHUNK_SIZE   = 3000
+DEFAULT_CHUNK_SIZE   = 1500
 DEFAULT_OVERLAP_SIZE = 300
 DEFAULT_MIN_BLOCK    = 50
 

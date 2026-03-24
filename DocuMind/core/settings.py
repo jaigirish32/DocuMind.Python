@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     azure_search_key: str = ""
     azure_search_index_name: str = "documind-pdf-generic2-index"
 
+    # Weaviate
+    weaviate_url:     str = ""
+    weaviate_api_key: str = ""
+
     # App
     app_env: str = "development"
     log_level: str = "INFO"
