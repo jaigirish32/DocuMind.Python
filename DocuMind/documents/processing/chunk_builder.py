@@ -8,9 +8,9 @@ from DocuMind.documents.raw.raw_document import RawDocument
 logger = get_logger(__name__)
 
 # ── Default constants ─────────────────────────────────────────────────────────
-DEFAULT_CHUNK_SIZE   = 1500
+DEFAULT_CHUNK_SIZE   = 800
 DEFAULT_OVERLAP_SIZE = 300
-DEFAULT_MIN_BLOCK    = 50
+DEFAULT_MIN_BLOCK    = 5
 
 # Default boilerplate patterns — applied to ALL documents
 DEFAULT_BOILERPLATE = [
@@ -69,11 +69,14 @@ class ChunkBuilder:
                 # Clean block text — remove boilerplate lines
                 text = self._clean_block_text(raw_block.text)
 
+                text = re.sub(r"\s+", " ", text)
+
                 if not text.strip():
                     continue
 
                 if len(text.strip()) < self._min_block:
-                    continue
+                    if ":" not in text and len(text.split()) < 2:
+                        continue
 
                 # Skip if entire block is boilerplate
                 if self._is_boilerplate(text):

@@ -98,6 +98,9 @@ class PdfReader:
         lines  = self._group_into_lines(words)
         blocks = self._group_into_blocks(lines)
 
+        if len(blocks) == 1 and len(lines) > 5:
+            blocks = [[line] for line in lines]
+
         result = []
         for block_lines in blocks:
             raw_block = RawBlock()
@@ -215,21 +218,22 @@ class PdfReader:
         return False
 
     def _group_into_lines(self, words: list[dict]) -> list[list[dict]]:
-        """Group words into lines by y-position."""
+        """Group words into lines by y-position (more strict)."""
         if not words:
             return []
 
-        lines: list[list[dict]] = []
-        current_line: list[dict] = [words[0]]
+        lines = []
+        current_line = [words[0]]
         current_top = words[0]["top"]
 
         for word in words[1:]:
-            if abs(word["top"] - current_top) <= 3:
+            # 🔥 stricter threshold
+            if abs(word["top"] - current_top) <= 1:
                 current_line.append(word)
             else:
                 lines.append(current_line)
                 current_line = [word]
-                current_top  = word["top"]
+                current_top = word["top"]
 
         if current_line:
             lines.append(current_line)
