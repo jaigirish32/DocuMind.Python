@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 @dataclass
@@ -23,4 +23,5 @@ class DocumentChunk:
     normalized_text: str = ""
     embedding_text: str = ""
     source: str = ""
-    upload_date: datetime = field(default_factory=datetime.utcnow)
+    upload_date: datetime = field(
+    default_factory=lambda: datetime.now(timezone.utc))

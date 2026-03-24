@@ -25,6 +25,12 @@ class ChatClient:
         self._client     = make_openai_client(settings)
         self._deployment = settings.azure_openai_chat_deployment
 
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        await self._client.close()
+
     async def ask(
         self,
         question:   str,

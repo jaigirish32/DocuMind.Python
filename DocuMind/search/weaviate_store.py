@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import weaviate
 import weaviate.classes as wvc
 from weaviate.client import WeaviateAsyncClient
@@ -17,11 +18,28 @@ UPLOAD_BATCH_SIZE = 100
 class WeaviateVectorStore:
     """
     Weaviate implementation of VectorStore protocol.
-    Uses composition — client injected from outside.
+
+    Lifecycle:
+        async with WeaviateVectorStore(client) as store:
+            await store.upload_documents(...)
+            await store.hybrid_search(...)
+
+    Connection is opened once in __aenter__ and
+    closed once in __aexit__ — no per-method overhead.
     """
 
     def __init__(self, client: WeaviateAsyncClient) -> None:
         self._client = client
+
+    async def __aenter__(self) -> WeaviateVectorStore:
+        await self._client.connect()
+        await self._ensure_collection()
+        logger.info("Weaviate connected")
+        return self
+
+    async def __aexit__(self, *args) -> None:
+        await self._client.close()
+        logger.info("Weaviate disconnected")
 
     # ── Upload ────────────────────────────────────────────────────────────────
 
@@ -35,8 +53,6 @@ class WeaviateVectorStore:
             return
 
         logger.info("Uploading chunks", count=len(chunks))
-
-        await self._ensure_collection()
 
         collection = self._client.collections.get(COLLECTION_NAME)
 
@@ -183,8 +199,7 @@ class WeaviateVectorStore:
                     data_type = wvc.config.DataType.TEXT,
                 ),
             ],
-            # We supply our own embeddings — no built-in vectorizer needed
             vector_config = wvc.config.Configure.Vectors.self_provided(),
         )
 
-    logger.info("Collection created", name=COLLECTION_NAME)
+        logger.info("Collection created", name=COLLECTION_NAME)

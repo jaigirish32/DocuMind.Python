@@ -19,6 +19,12 @@ class EmbeddingClient:
         self._client     = make_openai_client(settings)
         self._deployment = settings.azure_openai_embedding_deployment
 
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        await self._client.close()
+
     async def create_embeddings(
         self,
         texts: list[str],
@@ -28,16 +34,17 @@ class EmbeddingClient:
 
         logger.info("Creating embeddings", total=len(texts))
 
+        embeddings = []
+
         batches = [
             texts[i : i + BATCH_SIZE]
             for i in range(0, len(texts), BATCH_SIZE)
         ]
 
-        results = await asyncio.gather(
-            *[self._embed_batch(batch) for batch in batches]
-        )
+        for batch in batches:
+            batch_embeddings = await self._embed_batch(batch)
+            embeddings.extend(batch_embeddings)
 
-        embeddings = [vec for batch in results for vec in batch]
         logger.info("Embeddings created", count=len(embeddings))
         return embeddings
 
