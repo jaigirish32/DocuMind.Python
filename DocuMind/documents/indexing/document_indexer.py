@@ -8,7 +8,8 @@ from DocuMind.core.logging.logger import get_logger
 from DocuMind.core.errors.exceptions import DocumentParseError
 from DocuMind.documents.readers.pdf_reader import PdfReader
 from DocuMind.documents.processing.chunk_builder import ChunkBuilder
-from DocuMind.azure.embedding_client import EmbeddingClient
+from DocuMind.bge.embedding_client import EmbeddingClient
+#from DocuMind.azure.embedding_client import EmbeddingClient
 from DocuMind.search.protocols import VectorStore
 
 logger = get_logger(__name__)

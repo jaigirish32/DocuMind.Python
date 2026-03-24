@@ -4,7 +4,8 @@ import asyncio
 from dataclasses import dataclass
 from enum import Enum
 
-from DocuMind.azure.embedding_client import EmbeddingClient
+from DocuMind.bge.embedding_client import EmbeddingClient
+#from DocuMind.azure.embedding_client import EmbeddingClient
 from DocuMind.azure.chat_client import ChatClient
 from DocuMind.core.logging.logger import get_logger
 from DocuMind.search.protocols import VectorStore

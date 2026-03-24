@@ -205,11 +205,8 @@ class WeaviateVectorStore:
                     data_type = wvc.config.DataType.TEXT,
                 ),
             ],
-            vector_config = wvc.config.Configure.NamedVectors.none(
-                name                = "embedding",
-                vector_index_config = wvc.config.Configure.VectorIndex.hnsw(
-                    distance_metric = wvc.config.VectorDistances.COSINE,
-                ),
+            vector_index_config=wvc.config.Configure.VectorIndex.hnsw(
+            distance_metric=wvc.config.VectorDistances.COSINE,
             ),
         )
 
