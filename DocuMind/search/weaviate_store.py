@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import re
 import weaviate
 import weaviate.classes as wvc
 from weaviate.client import WeaviateAsyncClient
+from weaviate.classes.query import Filter
 
 from DocuMind.core.logging.logger import get_logger
 from DocuMind.core.errors.exceptions import SearchError
@@ -18,29 +18,22 @@ UPLOAD_BATCH_SIZE = 100
 class WeaviateVectorStore:
     """
     Weaviate implementation of VectorStore protocol.
-
-    Lifecycle:
-        async with WeaviateVectorStore(client) as store:
-            await store.upload_documents(...)
-            await store.hybrid_search(...)
-
-    Connection is opened once in __aenter__ and
-    closed once in __aexit__ — no per-method overhead.
+    Uses composition — client injected from outside.
     """
 
     def __init__(self, client: WeaviateAsyncClient) -> None:
         self._client = client
 
-    async def __aenter__(self) -> WeaviateVectorStore:
-        await self._client.connect()
-        await self._ensure_collection()
-        logger.info("Weaviate connected")
+    async def __aexit__(self, exc_type, exc, tb):
+        # Clean shutdown
+        if hasattr(self._client, "close"):
+            await self._client.close()
+
+    async def __aenter__(self):
+        # Connect if not already connected
+        if hasattr(self._client, "connect"):
+            await self._client.connect()
         return self
-
-    async def __aexit__(self, *args) -> None:
-        await self._client.close()
-        logger.info("Weaviate disconnected")
-
     # ── Upload ────────────────────────────────────────────────────────────────
 
     async def upload_documents(
@@ -53,6 +46,8 @@ class WeaviateVectorStore:
             return
 
         logger.info("Uploading chunks", count=len(chunks))
+
+        await self._ensure_collection()
 
         collection = self._client.collections.get(COLLECTION_NAME)
 
@@ -87,12 +82,17 @@ class WeaviateVectorStore:
         query:     str,
         embedding: list[float],
         top_k:     int = 10,
+        document_id: str | None = None,
     ) -> list[dict]:
         """Hybrid search — BM25 + vector combined."""
         logger.info("Hybrid search", query=query[:60], top_k=top_k)
 
         try:
             collection = self._client.collections.get(COLLECTION_NAME)
+
+            filters = None
+            if document_id:
+                filters = Filter.by_property("document_id").equal(document_id)
 
             results = await collection.query.hybrid(
                 query   = query,
@@ -119,6 +119,12 @@ class WeaviateVectorStore:
                 }
                 for obj in results.objects
             ]
+
+            if document_id:
+                chunks = [c for c in chunks if c["document_id"] == document_id]
+
+            # Trim to top_k after filtering
+            chunks = chunks[:top_k]
 
             logger.info("Search complete", results=len(chunks))
             return chunks
@@ -199,7 +205,12 @@ class WeaviateVectorStore:
                     data_type = wvc.config.DataType.TEXT,
                 ),
             ],
-            vector_config = wvc.config.Configure.Vectors.self_provided(),
+            vector_config = wvc.config.Configure.NamedVectors.none(
+                name                = "embedding",
+                vector_index_config = wvc.config.Configure.VectorIndex.hnsw(
+                    distance_metric = wvc.config.VectorDistances.COSINE,
+                ),
+            ),
         )
 
         logger.info("Collection created", name=COLLECTION_NAME)
