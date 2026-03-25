@@ -58,8 +58,8 @@ class DocumentIndexer:
         if not path.exists():
             raise DocumentParseError(str(path), "File not found")
 
-        # Generate document_id if not provided
-        doc_id = document_id or str(uuid.uuid4())
+        # Generate document_id if not provided — use filename for predictability
+        doc_id = document_id or path.stem  # path.stem = filename without extension
 
         logger.info(
             "Indexing document",

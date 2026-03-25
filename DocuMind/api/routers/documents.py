@@ -55,7 +55,7 @@ async def upload_document(
             detail      = "Only PDF files are supported"
         )
 
-    document_id = str(uuid.uuid4())
+    document_id = Path(file.filename).stem
     tmp_dir     = tempfile.gettempdir()
     tmp_path    = Path(tmp_dir) / file.filename
 

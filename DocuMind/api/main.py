@@ -26,8 +26,7 @@ async def lifespan(app: FastAPI):
 
     # Connect Weaviate
     store = create_weaviate_store()
-    await store._client.connect()
-    await store._ensure_collection()
+    await store.__aenter__()
     app.state.store = store
     logger.info("DocuMind API started")
 

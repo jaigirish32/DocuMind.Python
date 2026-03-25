@@ -154,20 +154,28 @@ class WeaviateVectorStore:
             logger.error("Delete failed", error=str(e))
             raise SearchError(str(e))
 
-    async def list_documents(self) -> list[str]:
-        """List all unique document names."""
+    async def list_documents(self) -> list[dict]:
+        """List all unique documents with name and id."""
         try:
             collection = self._client.collections.get(COLLECTION_NAME)
 
             results = await collection.query.fetch_objects(
                 limit             = 1000,
-                return_properties = ["document_name"],
+                return_properties = ["document_name", "document_id"],
             )
 
-            return list({
-                obj.properties["document_name"]
-                for obj in results.objects
-            })
+            # Deduplicate by document_id
+            seen = {}
+            for obj in results.objects:
+                doc_id   = obj.properties["document_id"]
+                doc_name = obj.properties["document_name"]
+                if doc_id not in seen:
+                    seen[doc_id] = doc_name
+
+            return [
+                {"document_id": k, "document_name": v}
+                for k, v in seen.items()
+            ]
 
         except Exception as e:
             logger.error("List documents failed", error=str(e))
