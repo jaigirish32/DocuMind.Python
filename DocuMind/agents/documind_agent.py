@@ -1,16 +1,71 @@
 from __future__ import annotations
 
-import asyncio
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 from enum import Enum
 
 from DocuMind.bge.embedding_client import EmbeddingClient
-#from DocuMind.azure.embedding_client import EmbeddingClient
 from DocuMind.azure.chat_client import ChatClient
 from DocuMind.core.logging.logger import get_logger
 from DocuMind.search.protocols import VectorStore
 
 logger = get_logger(__name__)
+
+MAX_ITERATIONS = 8
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_documents",
+            "description": (
+                "Search the indexed document collection using hybrid semantic + keyword search. "
+                "Always call this before answering — never answer from memory."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query derived from the user question.",
+                    },
+                    "document_id": {
+                        "type": "string",
+                        "description": "Optional — restrict search to one document by its ID.",
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Number of chunks to retrieve. Default 10, max 20.",
+                        "default": 10,
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_documents",
+            "description": "List all documents currently indexed. Use when the user asks what files are available.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+]
+
+SYSTEM_PROMPT = """You are DocuMind, an AI document intelligence assistant.
+
+Rules:
+- ALWAYS use the search_documents tool before answering any question about document content.
+- Never answer from memory or training data — only from retrieved chunks.
+- Cite the page number for every fact you state.
+- If search returns nothing relevant, say so honestly.
+- Financial tables appear in pipe format: "Label: value1 | value2 | value3"
+"""
 
 
 class QueryType(Enum):
@@ -19,19 +74,21 @@ class QueryType(Enum):
 
 @dataclass
 class AskResult:
-    answer:          str
-    source_pages:    list[int]
-    query_type:      QueryType
+    answer:       str
+    source_pages: list[int]
+    query_type:   QueryType
+    tool_calls:   list[dict] = field(default_factory=list)
 
 
 class DocuMindAgent:
     """
-    RAG agent — simple and clean.
+    AI Agent using OpenAI function calling.
 
-    3 API calls per question:
-        1. Azure Embeddings — embed question
-        2. Weaviate         — hybrid search
-        3. GPT-4o           — generate answer
+    Loop:
+        GPT-4o decides which tool to call
+        → tool executes (search_documents / list_documents)
+        → result fed back to GPT-4o
+        → repeat until GPT-4o produces a final text answer
     """
 
     def __init__(
@@ -54,12 +111,7 @@ class DocuMindAgent:
         self._min_chunk_length = min_chunk_length
         self._max_tokens       = max_tokens
 
-    async def ask(
-        self,
-        question:    str,
-        document_id: str | None = None,
-    ) -> str:
-        """Simple ask — returns answer string only."""
+    async def ask(self, question: str, document_id: str | None = None) -> str:
         result = await self.ask_structured(question, document_id)
         return result.answer
 
@@ -68,98 +120,124 @@ class DocuMindAgent:
         question:    str,
         document_id: str | None = None,
     ) -> AskResult:
-        """
-        Full pipeline — 3 API calls:
-        embed → search → answer
+        logger.info("Agent question", question=question[:80])
 
-        document_id — optional filter to search
-        within a specific document only.
-        """
-        logger.info("Question", question=question[:80])
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user",   "content": question},
+        ]
 
-        # Step 1 — embed question
-        embeddings = await self._embedder.create_embeddings([question])
-        if not embeddings:
-            return self._empty_result()
+        tool_call_log: list[dict] = []
+        source_pages:  list[int]  = []
+        iterations = 0
 
-        # Step 2 — hybrid search — filtered by document_id if provided
-        chunks = await self._store.hybrid_search(
-            query       = question,
-            embedding   = embeddings[0],
-            top_k       = self._top_k,
-            document_id = document_id,
+        while iterations < MAX_ITERATIONS:
+            iterations += 1
+            logger.info("Agent iteration", n=iterations)
+
+            response = await self._chat._client.chat.completions.create(
+                model       = self._chat._deployment,
+                messages    = messages,
+                tools       = TOOLS,
+                tool_choice = "auto",
+                temperature = 0.0,
+                max_tokens  = self._max_tokens,
+            )
+
+            msg = response.choices[0].message
+            messages.append(msg.model_dump(exclude_unset=True))
+
+            # No tool calls → final answer
+            if not msg.tool_calls:
+                logger.info("Agent done", iterations=iterations, pages=source_pages)
+                return AskResult(
+                    answer       = msg.content or "",
+                    source_pages = sorted(set(source_pages)),
+                    query_type   = QueryType.ANALYTICAL,
+                    tool_calls   = tool_call_log,
+                )
+
+            # Execute each tool call
+            for tc in msg.tool_calls:
+                fn   = tc.function.name
+                args = json.loads(tc.function.arguments or "{}")
+                logger.info("Tool call", tool=fn, args=args)
+
+                tool_result = await self._execute_tool(fn, args, document_id, source_pages)
+                tool_call_log.append({"tool": fn, "args": args})
+
+                messages.append({
+                    "role":         "tool",
+                    "tool_call_id": tc.id,
+                    "content":      tool_result,
+                })
+
+        logger.warning("Max iterations reached")
+        return AskResult(
+            answer       = "Could not produce an answer within the iteration limit.",
+            source_pages = sorted(set(source_pages)),
+            query_type   = QueryType.ANALYTICAL,
+            tool_calls   = tool_call_log,
         )
-        logger.info("Retrieved", count=len(chunks))
 
-        # Step 3 — filter short chunks
+    # ── Tool implementations ──────────────────────────────────────────────────
+
+    async def _execute_tool(
+        self,
+        fn:           str,
+        args:         dict,
+        document_id:  str | None,
+        source_pages: list[int],
+    ) -> str:
+        if fn == "search_documents":
+            return await self._tool_search(args, document_id, source_pages)
+        if fn == "list_documents":
+            return await self._tool_list()
+        return json.dumps({"error": f"Unknown tool: {fn}"})
+
+    async def _tool_search(
+        self,
+        args:         dict,
+        document_id:  str | None,
+        source_pages: list[int],
+    ) -> str:
+        query  = args.get("query", "")
+        top_k  = min(int(args.get("top_k", 10)), 20)
+        doc_id = args.get("document_id") or document_id
+
+        embeddings = await self._embedder.create_embeddings([query])
+        if not embeddings:
+            return json.dumps({"results": [], "message": "Embedding failed."})
+
+        chunks = await self._store.hybrid_search(
+            query       = query,
+            embedding   = embeddings[0],
+            top_k       = top_k,
+            document_id = doc_id,
+        )
+
         chunks = [
             c for c in chunks
             if len(c.get("text", "")) >= self._min_chunk_length
         ]
 
-        if not chunks:
-            return self._empty_result()
+        for c in chunks:
+            p = c.get("page_number")
+            if p is not None:
+                source_pages.append(p)
 
-        # Step 4 — MMR diversity reranking
-        chunks = self._mmr(chunks, self._mmr_diversity, self._mmr_top_k)
-        logger.info("After MMR", count=len(chunks))
-
-        # Step 5 — build context and get answer
-        source_pages = sorted({c["page_number"] for c in chunks})
-        context = "\n\n".join(
-            f"[Page {c['page_number']}]\n{c['text']}"
+        results = [
+            {
+                "page":   c.get("page_number"),
+                "text":   c.get("text", ""),
+                "doc_id": c.get("document_id", ""),
+            }
             for c in chunks
-        )
-        answer = await self._chat.ask(question, context, self._max_tokens)
+        ]
 
-        logger.info("Answer ready", pages=source_pages)
+        logger.info("search_documents", returned=len(results))
+        return json.dumps({"results": results})
 
-        return AskResult(
-            answer       = answer,
-            source_pages = source_pages,
-            query_type   = QueryType.ANALYTICAL,
-        )
-
-    # ── Private ───────────────────────────────────────────────────────────────
-
-    def _mmr(
-        self,
-        chunks:    list[dict],
-        diversity: float,
-        top_k:     int,
-    ) -> list[dict]:
-        """MMR — prefer chunks from different pages."""
-        if not chunks:
-            return []
-
-        selected   = [chunks[0]]
-        seen_pages = {chunks[0]["page_number"]}
-        remaining  = list(enumerate(chunks[1:], 1))
-
-        while len(selected) < top_k and remaining:
-
-            def score(idx_chunk: tuple) -> float:
-                i, chunk        = idx_chunk
-                relevance       = 1.0 / (1.0 + i)
-                diversity_score = (
-                    1.0 if chunk["page_number"] not in seen_pages
-                    else 0.1
-                )
-                return (
-                    (1.0 - diversity) * relevance
-                    + diversity * diversity_score
-                )
-
-            best = max(remaining, key=score)
-            remaining.remove(best)
-            selected.append(best[1])
-            seen_pages.add(best[1]["page_number"])
-
-        return selected
-
-    def _empty_result(self) -> AskResult:
-        return AskResult(
-            answer       = "I could not find relevant information. Please rephrase.",
-            source_pages = [],
-            query_type   = QueryType.ANALYTICAL,
-        )
+    async def _tool_list(self) -> str:
+        docs = await self._store.list_documents()
+        return json.dumps({"documents": docs})
