@@ -19,8 +19,10 @@ TOOLS = [
         "function": {
             "name": "search_documents",
             "description": (
-                "Search the indexed document collection using hybrid semantic + keyword search. "
-                "Always call this before answering — never answer from memory."
+                "Search uploaded PDF documents and files using hybrid semantic + keyword search. "
+                "Use this for questions about contracts, reports, manuals, financial statements, "
+                "or any uploaded file content. "
+                "Never use this for questions about emails, messages, or conversations."
             ),
             "parameters": {
                 "type": "object",
@@ -46,8 +48,38 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "search_emails",
+            "description": (
+                "Search indexed emails from Gmail or Outlook using hybrid semantic + keyword search. "
+                "Use this for questions about emails, messages, conversations, or anything "
+                "a person said, sent, or communicated. "
+                "Also use this when the question mentions a person's name, "
+                "sender, recipient, or any communication context even without the word 'email'. "
+                "Examples: 'What did John say about payment?', 'Did anyone mention the deadline?', "
+                "'What was discussed about the invoice?'"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query derived from the user question.",
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Number of email chunks to retrieve. Default 10, max 20.",
+                        "default": 10,
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_documents",
-            "description": "List all documents currently indexed. Use when the user asks what files are available.",
+            "description": "List all uploaded documents currently indexed. Use when the user asks what files are available.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -57,12 +89,19 @@ TOOLS = [
     },
 ]
 
-SYSTEM_PROMPT = """You are DocuMind, an AI document intelligence assistant.
+SYSTEM_PROMPT = """You are DocuMind, an AI document and email intelligence assistant.
+
+You have access to two knowledge sources:
+1. Uploaded documents (PDFs, reports, contracts) — search with search_documents
+2. Indexed emails (Gmail, Outlook) — search with search_emails
 
 Rules:
-- ALWAYS use the search_documents tool before answering any question about document content.
-- Never answer from memory or training data — only from retrieved chunks.
-- Cite the page number for every fact you state.
+- ALWAYS use the appropriate tool before answering — never answer from memory.
+- For document questions → use search_documents
+- For email/communication questions → use search_emails
+- For questions that could involve both → use BOTH tools and combine the results
+- If someone asks about what a person said or communicated → use search_emails
+- Cite page numbers for documents and sender/date for emails.
 - If search returns nothing relevant, say so honestly.
 - Financial tables appear in pipe format: "Label: value1 | value2 | value3"
 """
@@ -83,12 +122,7 @@ class AskResult:
 class DocuMindAgent:
     """
     AI Agent using OpenAI function calling.
-
-    Loop:
-        GPT-4o decides which tool to call
-        → tool executes (search_documents / list_documents)
-        → result fed back to GPT-4o
-        → repeat until GPT-4o produces a final text answer
+    Searches both documents and emails based on question context.
     """
 
     def __init__(
@@ -147,7 +181,6 @@ class DocuMindAgent:
             msg = response.choices[0].message
             messages.append(msg.model_dump(exclude_unset=True))
 
-            # No tool calls → final answer
             if not msg.tool_calls:
                 logger.info("Agent done", iterations=iterations, pages=source_pages)
                 return AskResult(
@@ -157,7 +190,6 @@ class DocuMindAgent:
                     tool_calls   = tool_call_log,
                 )
 
-            # Execute each tool call
             for tc in msg.tool_calls:
                 fn   = tc.function.name
                 args = json.loads(tc.function.arguments or "{}")
@@ -190,12 +222,14 @@ class DocuMindAgent:
         source_pages: list[int],
     ) -> str:
         if fn == "search_documents":
-            return await self._tool_search(args, document_id, source_pages)
+            return await self._tool_search_documents(args, document_id, source_pages)
+        if fn == "search_emails":
+            return await self._tool_search_emails(args)
         if fn == "list_documents":
             return await self._tool_list()
         return json.dumps({"error": f"Unknown tool: {fn}"})
 
-    async def _tool_search(
+    async def _tool_search_documents(
         self,
         args:         dict,
         document_id:  str | None,
@@ -236,6 +270,23 @@ class DocuMindAgent:
         ]
 
         logger.info("search_documents", returned=len(results))
+        return json.dumps({"results": results})
+
+    async def _tool_search_emails(self, args: dict) -> str:
+        query = args.get("query", "")
+        top_k = min(int(args.get("top_k", 10)), 20)
+
+        embeddings = await self._embedder.create_embeddings([query])
+        if not embeddings:
+            return json.dumps({"results": [], "message": "Embedding failed."})
+
+        results = await self._store.search_emails(
+            query     = query,
+            embedding = embeddings[0],
+            top_k     = top_k,
+        )
+
+        logger.info("search_emails", returned=len(results))
         return json.dumps({"results": results})
 
     async def _tool_list(self) -> str:
