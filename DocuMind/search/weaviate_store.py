@@ -76,6 +76,101 @@ class WeaviateVectorStore:
 
         logger.info("Upload complete", chunks=len(chunks))
 
+    async def upload_email_chunks(
+    self,
+    chunks:     list[dict],
+    embeddings: list[list[float]],
+) -> None:
+        """Upload email chunks with embeddings to Weaviate."""
+        if not chunks:
+            return
+
+        logger.info("Uploading email chunks", count=len(chunks))
+
+        await self._ensure_email_collection()
+
+        collection = self._client.collections.get("DocuMindEmail")
+
+        objects = [
+            wvc.data.DataObject(
+                properties = {
+                    "message_id":  chunk["message_id"],
+                    "thread_id":   chunk["thread_id"],
+                    "subject":     chunk["subject"],
+                    "sender":      chunk["sender"],
+                    "date":        chunk["date"],
+                    "content":     chunk["text"],
+                    "chunk_index": chunk["chunk_index"],
+                },
+                vector = embedding,
+            )
+            for chunk, embedding in zip(chunks, embeddings)
+        ]
+
+        for i in range(0, len(objects), UPLOAD_BATCH_SIZE):
+            batch  = objects[i : i + UPLOAD_BATCH_SIZE]
+            result = await collection.data.insert_many(batch)
+            if result.has_errors:
+                for err in result.errors.values():
+                    logger.error("Email chunk upload error", error=str(err))
+
+        logger.info("Email upload complete", chunks=len(chunks))
+
+    async def search_emails(
+    self,
+    query:     str,
+    embedding: list[float],
+    top_k:     int = 10,
+) -> list[dict]:
+        """Hybrid search over email collection."""
+        logger.info("Email search", query=query[:60], top_k=top_k)
+
+        try:
+            collection = self._client.collections.get("DocuMindEmail")
+
+            results = await collection.query.hybrid(
+                query  = query,
+                vector = embedding,
+                limit  = top_k,
+                return_properties = [
+                    "message_id",
+                    "thread_id",
+                    "subject",
+                    "sender",
+                    "date",
+                    "content",
+                    "chunk_index",
+                ],
+                return_metadata = wvc.query.MetadataQuery(score=True),
+            )
+
+            return [
+                {
+                    "message_id": obj.properties["message_id"],
+                    "thread_id":  obj.properties["thread_id"],
+                    "subject":    obj.properties["subject"],
+                    "sender":     obj.properties["sender"],
+                    "date":       obj.properties["date"],
+                    "text":       obj.properties["content"],
+                    "score":      obj.metadata.score,
+                }
+                for obj in results.objects
+            ]
+
+        except Exception as e:
+            logger.error("Email search failed", error=str(e))
+        return []
+
+
+    async def count_emails(self) -> int:
+        """Count total indexed email chunks."""
+        try:
+            collection = self._client.collections.get("DocuMindEmail")
+            result     = await collection.aggregate.over_all(total_count=True)
+            return result.total_count or 0
+        except Exception:
+            return 0
+
     # ── Search ────────────────────────────────────────────────────────────────
 
     async def hybrid_search(
@@ -220,3 +315,26 @@ class WeaviateVectorStore:
         )
 
         logger.info("Collection created", name=COLLECTION_NAME)
+    
+    async def _ensure_email_collection(self) -> None:
+        """Create email collection if it does not exist."""
+        exists = await self._client.collections.exists("DocuMindEmail")
+        if exists:
+            return
+
+        await self._client.collections.create(
+            name = "DocuMindEmail",
+            properties = [
+                wvc.config.Property(name="message_id",  data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="thread_id",   data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="subject",     data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="sender",      data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="date",        data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="content",     data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="chunk_index", data_type=wvc.config.DataType.INT),
+            ],
+            vector_index_config=wvc.config.Configure.VectorIndex.hnsw(
+                distance_metric=wvc.config.VectorDistances.COSINE,
+            ),
+        )
+        logger.info("Email collection created")

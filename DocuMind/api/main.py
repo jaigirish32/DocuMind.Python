@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from DocuMind.core.logging.logger import setup_logging, get_logger
 from DocuMind.core.settings import get_settings
 from DocuMind.api.routers.documents import router as documents_router
+from DocuMind.api.routers.email import router as email_router
 from DocuMind.search.factory import create_weaviate_store
 
 logger = get_logger(__name__)
@@ -53,3 +54,4 @@ app.add_middleware(
 )
 # Register routers
 app.include_router(documents_router)
+app.include_router(email_router)

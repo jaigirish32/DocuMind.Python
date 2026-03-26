@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     azure_document_intelligence_endpoint: str = ""
     azure_document_intelligence_key:      str = ""
 
+    # Gmail
+    gmail_credentials_file: str = "gmail_credentials.json"
+    gmail_token_file:       str = "gmail_token.json"
+
     llm_provider: str = "azure"   # "azure" or "ollama"
     ollama_model: str = "llama3.1:8b"
 
