@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     # Azure OpenAI
     azure_openai_endpoint: str = ""
     azure_openai_key: str = ""
-    azure_openai_chat_deployment: str = "gpt-4o"
+    azure_openai_chat_deployment: str = "gpt-4o-mini"
     azure_openai_embedding_deployment: str = "text-embedding-3-large"
 
     # Azure Search
@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     # Azure Document Intelligence
     azure_document_intelligence_endpoint: str = ""
     azure_document_intelligence_key:      str = ""
+
+    llm_provider: str = "azure"   # "azure" or "ollama"
+    ollama_model: str = "llama3.1:8b"
 
     # App
     app_env: str = "development"
