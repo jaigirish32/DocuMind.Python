@@ -63,6 +63,7 @@ class WeaviateVectorStore:
                 vector = embedding,
             )
             for chunk, embedding in zip(chunks, embeddings)
+
         ]
 
         for i in range(0, len(objects), UPLOAD_BATCH_SIZE):

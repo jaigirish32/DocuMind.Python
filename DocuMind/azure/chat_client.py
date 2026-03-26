@@ -8,9 +8,9 @@ logger = get_logger(__name__)
 
 SYSTEM_PROMPT = """You are DocuMind...
 - Financial tables appear in pipe format: "Label: Value | Label: Value"
-  Example: "Total revenues: $ | 96,773" means Total revenues = $96,773 million
-"""
 
+"""
+#Example: "Total revenues: $ | 96,773" means Total revenues = $96,773 million
 
 class ChatClient:
     """Sends questions to Azure OpenAI GPT-4o."""

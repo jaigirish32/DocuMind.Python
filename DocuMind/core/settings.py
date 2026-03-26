@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     weaviate_url:     str = ""
     weaviate_api_key: str = ""
 
+    # Azure Document Intelligence
+    azure_document_intelligence_endpoint: str = ""
+    azure_document_intelligence_key:      str = ""
+
     # App
     app_env: str = "development"
     log_level: str = "INFO"

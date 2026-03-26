@@ -1,8 +1,9 @@
 from __future__ import annotations
-
 import pdfplumber
 from pathlib import Path
-
+import re
+from typing import List, Optional
+from collections import defaultdict
 from DocuMind.core.logging.logger import get_logger
 from DocuMind.core.errors.exceptions import DocumentParseError
 from DocuMind.documents.raw.raw_document import (
@@ -82,6 +83,8 @@ class PdfReader:
             extra_attrs=["fontname", "size"],
         )
 
+        
+
         if not words:
             return []
 
@@ -133,72 +136,129 @@ class PdfReader:
 
         return result
 
-    def _extract_table_blocks(
-        self,
-        page: pdfplumber.page.Page,
-    ) -> list[RawBlock]:
-        """
-        Extract tables as structured RawBlocks.
-
-        Each table row becomes a RawLine.
-        Format: "Header1: Value1 | Header2: Value2"
-
-        Example:
-            "Total revenues: $96,773M | Automotive: $82,418M"
-
-        This keeps label and value together — solving the
-        main problem with the C++ Poppler approach.
-        """
+    def _extract_table_blocks(self, page) -> List[RawBlock]:
         tables = page.extract_tables()
         result = []
 
         for table in tables:
-            if not table or len(table) < 2:
-                continue
+            # if self.is_bad_table(table):
+            #     logger.info("Bad table detected → skipping")
+            #     continue
 
-            # First row is headers
-            headers = [
-                cell.strip() if cell else ""
-                for cell in table[0]
-            ]
+            # --------------------------------------------------
+            # 1. Find the row that contains the years
+            # --------------------------------------------------
+            year_row_idx = None
+            best_year_count = 0
 
-            raw_block = RawBlock()
-
-            # Process each data row
-            for row in table[1:]:
-                if not row or all(cell is None or cell.strip() == "" for cell in row):
-                    continue
-
-                # Build "Header: Value | Header: Value" format
-                parts = []
-                for i, cell in enumerate(row):
+            for idx, row in enumerate(table):
+                # Count cells that look like a 4-digit year (1900-2099)
+                # Also allow "2023 (1)" or "FY2023" if needed
+                year_count = 0
+                for cell in row:
                     if cell is None:
                         continue
-                    cell = cell.strip()
-                    if not cell:
-                        continue
+                    cell_str = str(cell).strip()
+                    # Simple pattern: 4 digits, optionally preceded by "FY" or followed by "(...)"
+                    # Adjust if your PDF uses different formatting
+                    if re.match(r'^(?:FY)?(19|20)\d{2}(?:\s*\(.*\))?$', cell_str):
+                        year_count += 1
+                if year_count > best_year_count:
+                    best_year_count = year_count
+                    year_row_idx = idx
 
-                    header = headers[i] if i < len(headers) else ""
-                    if header:
-                        parts.append(f"{header}: {cell}")
-                    else:
-                        parts.append(cell)
+            # If no row with years found, fallback to first non‑empty row
+            if year_row_idx is None:
+                # Find the first row that has at least 2 non‑empty cells
+                for idx, row in enumerate(table):
+                    non_empty = [c for c in row if c is not None and str(c).strip()]
+                    if len(non_empty) >= 2:
+                        year_row_idx = idx
+                        break
+                # If still none, fallback to first row
+                if year_row_idx is None:
+                    year_row_idx = 0
 
-                if not parts:
+            # --------------------------------------------------
+            # 2. Build column → year mapping
+            # --------------------------------------------------
+            header_row = table[year_row_idx]
+            # Data rows are all rows except the header row
+            data_rows = [row for i, row in enumerate(table) if i != year_row_idx]
+
+            col_to_year = {}
+            for col, cell in enumerate(header_row):
+                if cell is None:
+                    continue
+                cell_str = str(cell).strip()
+                # Extract the year part (e.g., from "2023 (1)" or "FY2023")
+                match = re.search(r'(19|20)\d{2}', cell_str)
+                if match:
+                    col_to_year[col] = match.group(0)   # store just the year digits
+                else:
+                    # If this cell is not a year, keep track for debugging
+                    pass
+
+            # If we still have no years, fallback to using column indices
+            if not col_to_year:
+                # Use the first few columns as "Year 1", "Year 2", etc.
+                # This should not happen for the Tesla 10-K, but just in case.
+                for col in range(1, len(header_row)):
+                    col_to_year[col] = f"Year {col}"
+
+            # --------------------------------------------------
+            # 3. Generate text lines
+            # --------------------------------------------------
+            raw_block = RawBlock()
+            for row in data_rows:
+                if not row or all(cell is None or str(cell).strip() == "" for cell in row):
                     continue
 
-                row_text = " | ".join(parts)
+                # The first cell is the label (e.g., "Total revenues")
+                label = str(row[0]).strip() if row[0] else ""
 
-                # Build RawLine from row text
-                raw_line = RawLine()
-                raw_word = RawWord(text=row_text)
-                raw_line.words.append(raw_word)
-                raw_block.lines.append(raw_line)
+                if not label:
+                    continue
+
+                # For each column that maps to a year, create a line
+                for col, year in col_to_year.items():
+                    if col < len(row):
+                        value_cell = row[col]
+                        if value_cell is not None and str(value_cell).strip():
+                            value = str(value_cell).strip()
+                            # Clean up common formatting: remove $ and commas
+                            value = value.replace('$', '').replace(',', '')
+                            text = f"{label} for {year} is {value}"
+                            raw_line = RawLine()
+                            raw_line.words.append(RawWord(text=text))
+                            raw_block.lines.append(raw_line)
 
             if raw_block.lines:
                 result.append(raw_block)
 
         return result
+
+    def is_bad_table(self,table):
+        if not table or len(table) < 2:
+            return True
+
+        # header must contain years
+        headers = table[0]
+
+        year_count = sum(
+            1 for h in headers
+            if h and any(y in h for y in ["2023", "2022", "2021"])
+        )
+
+        # if no proper year columns → bad table
+        if year_count == 0:
+            return True
+
+        # too many empty cells
+        empty = sum(1 for row in table for c in row if not c)
+        total = sum(len(row) for row in table)
+
+        return (empty / total) > 0.4
 
     def _is_in_table(
         self,
@@ -266,3 +326,4 @@ class PdfReader:
             blocks.append(current_block)
 
         return blocks
+    

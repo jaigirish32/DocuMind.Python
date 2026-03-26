@@ -15,6 +15,7 @@ from DocuMind.documents.readers.pdf_reader import PdfReader
 from DocuMind.documents.indexing.document_indexer import DocumentIndexer
 from DocuMind.api.dependencies import get_embedding_client, get_chat_client
 from DocuMind.agents.documind_agent import DocuMindAgent
+from DocuMind.documents.readers.azure_document_reader import AzureDocumentReader
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api", tags=["documents"])
@@ -66,7 +67,8 @@ async def upload_document(
 
         store    = request.app.state.store
         embedder = get_embedding_client()
-        reader   = PdfReader()
+        reader = AzureDocumentReader()
+        #reader   = PdfReader()
 
         indexer = DocumentIndexer(
             reader   = reader,

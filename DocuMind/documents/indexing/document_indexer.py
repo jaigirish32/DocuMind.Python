@@ -95,6 +95,10 @@ class DocumentIndexer:
                 "chunks":      0,
                 "pages":       len(raw_doc.pages),
             }
+        
+        for c in chunks:
+            if c.page_number == 65:
+                logger.info("page number 65 chunk", t = c.text)
 
         logger.info("Chunks built", count=len(chunks))
 
