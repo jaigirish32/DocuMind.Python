@@ -153,11 +153,17 @@ class DocuMindAgent:
         self,
         question:    str,
         document_id: str | None = None,
+        history:     list[dict] = [],
     ) -> AskResult:
         logger.info("Agent question", question=question[:80])
 
+        system = SYSTEM_PROMPT
+        if document_id:
+            system += f"\n\nIMPORTANT: The user has selected document '{document_id}'. ALWAYS search only this document unless the user explicitly asks about another document. Pass document_id='{document_id}' to every search_documents call."
+
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
+            *history,
             {"role": "user",   "content": question},
         ]
 
@@ -169,11 +175,23 @@ class DocuMindAgent:
             iterations += 1
             logger.info("Agent iteration", n=iterations)
 
+            # When document is selected — remove list_documents tool
+            active_tools = (
+                [t for t in TOOLS if t["function"]["name"] != "list_documents"]
+                if document_id else TOOLS
+            )
+
+            tool_choice = (
+                {"type": "function", "function": {"name": "search_documents"}}
+                if document_id and iterations == 1
+                else "auto"
+            )
+
             response = await self._chat._client.chat.completions.create(
                 model       = self._chat._deployment,
                 messages    = messages,
                 tools       = TOOLS,
-                tool_choice = "auto",
+                tool_choice = tool_choice,
                 temperature = 0.0,
                 max_tokens  = self._max_tokens,
             )
@@ -215,17 +233,21 @@ class DocuMindAgent:
     # ── Tool implementations ──────────────────────────────────────────────────
 
     async def _execute_tool(
-        self,
-        fn:           str,
-        args:         dict,
-        document_id:  str | None,
-        source_pages: list[int],
-    ) -> str:
+    self,
+    fn:           str,
+    args:         dict,
+    document_id:  str | None,
+    source_pages: list[int],
+) -> str:
         if fn == "search_documents":
             return await self._tool_search_documents(args, document_id, source_pages)
         if fn == "search_emails":
             return await self._tool_search_emails(args)
         if fn == "list_documents":
+            if document_id:
+                # When document is selected — don't list all docs, search selected one
+                args["query"] = "overview contents summary"
+                return await self._tool_search_documents(args, document_id, source_pages)
             return await self._tool_list()
         return json.dumps({"error": f"Unknown tool: {fn}"})
 

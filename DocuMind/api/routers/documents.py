@@ -9,7 +9,7 @@ import os
 import aiofiles
 from fastapi import APIRouter, UploadFile, File, HTTPException, Request
 from pydantic import BaseModel
-
+from DocuMind.core.settings import get_settings
 from DocuMind.core.logging.logger import get_logger
 from DocuMind.documents.readers.pdf_reader import PdfReader
 from DocuMind.documents.indexing.document_indexer import DocumentIndexer
@@ -34,7 +34,7 @@ class UploadResponse(BaseModel):
 class AskRequest(BaseModel):
     question:    str
     document_id: str | None = None
-
+    history:     list[dict] = []
 
 class AskResponse(BaseModel):
     answer:       str
@@ -55,6 +55,17 @@ async def upload_document(
             status_code = 400,
             detail      = "Only PDF files are supported"
         )
+    # File size check
+    settings = get_settings()
+    if settings.max_upload_size_mb > 0:
+        content = await file.read()
+        size_mb = len(content) / (1024 * 1024)
+        if size_mb > settings.max_upload_size_mb:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File too large. Maximum size is {settings.max_upload_size_mb} MB. Your file is {size_mb:.1f} MB."
+            )
+    await file.seek(0)
 
     document_id = Path(file.filename).stem
     tmp_dir     = tempfile.gettempdir()
@@ -113,6 +124,7 @@ async def ask_question(request: Request, body: AskRequest):
     result = await agent.ask_structured(
         question    = body.question,
         document_id = body.document_id,
+        history     = body.history,
     )
 
     return AskResponse(

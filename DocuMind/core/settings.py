@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     llm_provider: str = "azure"   # "azure" or "ollama"
     ollama_model: str = "llama3.1:8b"
 
+    # Upload settings
+    max_upload_size_mb: int = 5        # change to 0 to disable limit
+
     # App
     app_env: str = "development"
     log_level: str = "INFO"
