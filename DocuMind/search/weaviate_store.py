@@ -271,6 +271,7 @@ class WeaviateVectorStore:
                 include_vector    = False,
             )
 
+
             # Deduplicate by document_id
             seen = {}
             for obj in results.objects:
