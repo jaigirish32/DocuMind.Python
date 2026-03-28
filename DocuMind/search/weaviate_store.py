@@ -267,7 +267,7 @@ class WeaviateVectorStore:
 
             results = await collection.query.fetch_objects(
                 limit             = 1000,
-                #return_properties = ["document_name", "document_id"],
+                return_properties = ["document_name", "document_id"],
             )
 
             # Deduplicate by document_id
