@@ -267,7 +267,7 @@ class WeaviateVectorStore:
 
             results = await collection.query.fetch_objects(
                 limit             = 1000,
-                return_properties = ["document_name", "document_id"],
+                include_vector    = False,
             )
 
             # Deduplicate by document_id
@@ -276,7 +276,8 @@ class WeaviateVectorStore:
                 doc_id   = obj.properties.get("document_id", "")
                 doc_name = obj.properties.get("document_name", "")
                 doc_name = doc_name.split("/")[-1].split("\\")[-1]
-                category = obj.properties.get("category", "Others")
+                raw_cat = obj.properties.get("category")
+                category = obj.properties.get("category") or "Others"
                 if doc_id and doc_id not in seen:
                     seen[doc_id] = {"document_name": doc_name, "category": category}
 

@@ -104,7 +104,6 @@ class DocumentIndexer:
         logger.info("Chunks built", count=len(chunks))
         for chunk in chunks:
             chunk.category = category
-
         logger.info("Category set on chunks", category=category, count=len(chunks))
 
         # Use embedding_text for better retrieval
