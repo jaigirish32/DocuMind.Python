@@ -50,7 +50,8 @@ class WeaviateVectorStore:
         await self._ensure_collection()
 
         collection = self._client.collections.get(COLLECTION_NAME)
-
+        await self._add_category_property_if_missing()
+        
         objects = [
             wvc.data.DataObject(
                 properties = {
@@ -59,12 +60,14 @@ class WeaviateVectorStore:
                     "document_name": chunk.document_name,
                     "page_number":   chunk.page_number,
                     "content":       chunk.text,
+                    "category":      getattr(chunk, "category", "Others"),
                 },
                 vector = embedding,
             )
             for chunk, embedding in zip(chunks, embeddings)
 
         ]
+        logger.info("Uploading with category", category=chunks[0].category if chunks else "none")
 
         for i in range(0, len(objects), UPLOAD_BATCH_SIZE):
             batch  = objects[i : i + UPLOAD_BATCH_SIZE]
@@ -174,12 +177,14 @@ class WeaviateVectorStore:
     # ── Search ────────────────────────────────────────────────────────────────
 
     async def hybrid_search(
-        self,
-        query:     str,
-        embedding: list[float],
-        top_k:     int = 10,
-        document_id: str | None = None,
-    ) -> list[dict]:
+    self,
+    query:       str,
+    embedding:   list[float],
+    top_k:       int = 10,
+    document_id: str | None = None,
+    document_ids: list[str] | None = None,
+    category:    str | None = None,
+) -> list[dict]:
         """Hybrid search — BM25 + vector combined."""
         logger.info("Hybrid search", query=query[:60], top_k=top_k)
 
@@ -189,10 +194,15 @@ class WeaviateVectorStore:
             filters = None
             if document_id:
                 filters = Filter.by_property("document_id").equal(document_id)
+            elif document_ids:
+                filters = Filter.by_property("document_id").contains_any(document_ids)
+            elif category:
+                filters = Filter.by_property("category").equal(category)
 
             results = await collection.query.hybrid(
                 query   = query,
                 vector  = embedding,
+                filters = filters, # Girish
                 limit   = top_k,
                 return_properties = [
                     "chunk_id",
@@ -257,19 +267,25 @@ class WeaviateVectorStore:
 
             results = await collection.query.fetch_objects(
                 limit             = 1000,
-                return_properties = ["document_name", "document_id"],
+                #return_properties = ["document_name", "document_id"],
             )
 
             # Deduplicate by document_id
             seen = {}
             for obj in results.objects:
-                doc_id   = obj.properties["document_id"]
-                doc_name = obj.properties["document_name"]
-                if doc_id not in seen:
-                    seen[doc_id] = doc_name
+                doc_id   = obj.properties.get("document_id", "")
+                doc_name = obj.properties.get("document_name", "")
+                doc_name = doc_name.split("/")[-1].split("\\")[-1]
+                category = obj.properties.get("category", "Others")
+                if doc_id and doc_id not in seen:
+                    seen[doc_id] = {"document_name": doc_name, "category": category}
 
             return [
-                {"document_id": k, "document_name": v}
+                {
+                    "document_id":   k,
+                    "document_name": v["document_name"],
+                    "category":      v["category"],
+                }
                 for k, v in seen.items()
             ]
 
@@ -308,6 +324,10 @@ class WeaviateVectorStore:
                     name      = "content",
                     data_type = wvc.config.DataType.TEXT,
                 ),
+                wvc.config.Property(
+                    name      = "category",
+                    data_type = wvc.config.DataType.TEXT,
+                ),
             ],
             vector_index_config=wvc.config.Configure.VectorIndex.hnsw(
             distance_metric=wvc.config.VectorDistances.COSINE,
@@ -316,6 +336,23 @@ class WeaviateVectorStore:
 
         logger.info("Collection created", name=COLLECTION_NAME)
     
+    async def _add_category_property_if_missing(self) -> None:
+        """Add category property to existing collection if not present."""
+        try:
+            collection = self._client.collections.get(COLLECTION_NAME)
+            config = await collection.config.get()
+            existing = [p.name for p in config.properties]
+            if "category" not in existing:
+                await collection.config.add_property(
+                    wvc.config.Property(
+                        name      = "category",
+                        data_type = wvc.config.DataType.TEXT,
+                    )
+                )
+                logger.info("Added category property to existing collection")
+        except Exception as e:
+            logger.warning("Could not add category property", error=str(e))
+
     async def _ensure_email_collection(self) -> None:
         """Create email collection if it does not exist."""
         exists = await self._client.collections.exists("DocuMindEmail")

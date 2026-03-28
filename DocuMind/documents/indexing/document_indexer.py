@@ -45,6 +45,7 @@ class DocumentIndexer:
         self,
         path:                 Path,
         document_id:          str  | None = None,
+        category:             str         = "Others",
         boilerplate_patterns: list[str]   = None,
     ) -> dict:
         """
@@ -101,6 +102,10 @@ class DocumentIndexer:
                 logger.info("page number 65 chunk", t = c.text)
 
         logger.info("Chunks built", count=len(chunks))
+        for chunk in chunks:
+            chunk.category = category
+
+        logger.info("Category set on chunks", category=category, count=len(chunks))
 
         # Use embedding_text for better retrieval
         # Fall back to text if embedding_text is empty
@@ -123,7 +128,7 @@ class DocumentIndexer:
 
         return {
             "document_id":   doc_id,
-            "document_name": path.name,
+            "document_name": Path(path.name).name,
             "chunks":        len(chunks),
             "pages":         len(raw_doc.pages),
         }

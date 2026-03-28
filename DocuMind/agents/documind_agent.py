@@ -153,6 +153,7 @@ class DocuMindAgent:
         self,
         question:    str,
         document_id: str | None = None,
+        document_ids: list[str] | None = None,
         history:     list[dict] = [],
     ) -> AskResult:
         logger.info("Agent question", question=question[:80])
@@ -213,7 +214,7 @@ class DocuMindAgent:
                 args = json.loads(tc.function.arguments or "{}")
                 logger.info("Tool call", tool=fn, args=args)
 
-                tool_result = await self._execute_tool(fn, args, document_id, source_pages)
+                tool_result = await self._execute_tool(fn, args, document_id,document_ids, source_pages)
                 tool_call_log.append({"tool": fn, "args": args})
 
                 messages.append({
@@ -237,17 +238,18 @@ class DocuMindAgent:
     fn:           str,
     args:         dict,
     document_id:  str | None,
+    document_ids: list[str] | None,
     source_pages: list[int],
 ) -> str:
         if fn == "search_documents":
-            return await self._tool_search_documents(args, document_id, source_pages)
+            return await self._tool_search_documents(args, document_id, document_ids,source_pages)
         if fn == "search_emails":
             return await self._tool_search_emails(args)
         if fn == "list_documents":
             if document_id:
                 # When document is selected — don't list all docs, search selected one
                 args["query"] = "overview contents summary"
-                return await self._tool_search_documents(args, document_id, source_pages)
+                return await self._tool_search_documents(args, document_id, document_ids,source_pages)
             return await self._tool_list()
         return json.dumps({"error": f"Unknown tool: {fn}"})
 
@@ -255,6 +257,7 @@ class DocuMindAgent:
         self,
         args:         dict,
         document_id:  str | None,
+        document_ids: list[str] | None,
         source_pages: list[int],
     ) -> str:
         query  = args.get("query", "")
@@ -266,10 +269,11 @@ class DocuMindAgent:
             return json.dumps({"results": [], "message": "Embedding failed."})
 
         chunks = await self._store.hybrid_search(
-            query       = query,
-            embedding   = embeddings[0],
-            top_k       = top_k,
-            document_id = doc_id,
+            query        = query,
+            embedding    = embeddings[0],
+            top_k        = top_k,
+            document_id  = doc_id,
+            document_ids = document_ids if not doc_id else None,
         )
 
         chunks = [

@@ -7,7 +7,7 @@ import tempfile
 import os
 
 import aiofiles
-from fastapi import APIRouter, UploadFile, File, HTTPException, Request
+from fastapi import APIRouter, UploadFile, File, HTTPException, Request, Form
 from pydantic import BaseModel
 from DocuMind.core.settings import get_settings
 from DocuMind.core.logging.logger import get_logger
@@ -29,11 +29,13 @@ class UploadResponse(BaseModel):
     pages:         int
     chunks:        int
     message:       str
+    category:      str = "Others"
 
 
 class AskRequest(BaseModel):
     question:    str
     document_id: str | None = None
+    document_ids: list[str] | None = None
     history:     list[dict] = []
 
 class AskResponse(BaseModel):
@@ -48,7 +50,9 @@ class AskResponse(BaseModel):
 async def upload_document(
     request: Request,
     file:    UploadFile = File(...),
+    category: str = Form("Others"),
 ):
+    logger.info("Upload request", category=category, filename=file.filename)
     """Upload a PDF and index it in Weaviate."""
     if not file.filename.endswith(".pdf"):
         raise HTTPException(
@@ -90,6 +94,7 @@ async def upload_document(
         result = await indexer.index(
             path=tmp_path,
             document_id = document_id,
+            category    = category,
         )
 
         return UploadResponse(
@@ -98,6 +103,7 @@ async def upload_document(
             pages         = result["pages"],
             chunks        = result["chunks"],
             message       = "Document indexed successfully",
+            category      = category,
         )
 
     finally:
@@ -124,6 +130,7 @@ async def ask_question(request: Request, body: AskRequest):
     result = await agent.ask_structured(
         question    = body.question,
         document_id = body.document_id,
+        document_ids = body.document_ids,
         history     = body.history,
     )
 
