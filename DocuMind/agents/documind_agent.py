@@ -278,7 +278,7 @@ class DocuMindAgent:
 
         chunks = [
             c for c in chunks
-            if len(c.get("text", "")) >= self._min_chunk_length
+            if len(c.get("content", "")) >= self._min_chunk_length
         ]
 
         for c in chunks:
@@ -289,7 +289,7 @@ class DocuMindAgent:
         results = [
             {
                 "page":   c.get("page_number"),
-                "text":   c.get("text", ""),
+                "text":   c.get("content", ""),
                 "doc_id": c.get("document_id", ""),
             }
             for c in chunks

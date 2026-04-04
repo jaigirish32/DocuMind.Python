@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     azure_openai_endpoint: str = ""
     azure_openai_key: str = ""
     azure_openai_chat_deployment: str = "gpt-4o-mini"
-    azure_openai_embedding_deployment: str = "text-embedding-3-large"
+    azure_openai_embedding_deployment: str = "text-embedding-3-small"
 
     # Azure Search
     azure_search_endpoint: str = ""

@@ -3,6 +3,7 @@ from __future__ import annotations
 import weaviate
 from DocuMind.core.settings import get_settings
 from DocuMind.search.weaviate_store import WeaviateVectorStore
+from DocuMind.search.azure_search_store import AzureSearchStore
 
 
 def create_weaviate_store() -> WeaviateVectorStore:
@@ -22,3 +23,10 @@ def create_weaviate_store() -> WeaviateVectorStore:
     )
 
     return WeaviateVectorStore(client=client)
+
+def create_search_store() -> AzureSearchStore:
+    """
+    Factory function — creates AzureSearchStore.
+    One place for all wiring — easy to swap later.
+    """
+    return AzureSearchStore()

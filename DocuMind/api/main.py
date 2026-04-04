@@ -9,15 +9,16 @@ from DocuMind.core.logging.logger import setup_logging, get_logger
 from DocuMind.core.settings import get_settings
 from DocuMind.api.routers.documents import router as documents_router
 from DocuMind.api.routers.email import router as email_router
-from DocuMind.search.factory import create_weaviate_store
+from DocuMind.search.azure_search_store import AzureSearchStore
 
 logger = get_logger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     FastAPI lifespan — runs at startup and shutdown.
-    Connects Weaviate on startup, disconnects on shutdown.
+    Creates Azure Search index on startup if it doesn't exist.
     """
     settings = get_settings()
     setup_logging(
@@ -25,17 +26,16 @@ async def lifespan(app: FastAPI):
         is_development = settings.is_development,
     )
 
-    # Connect Weaviate
-    store = create_weaviate_store()
-    await store.__aenter__()
+    # Initialize Azure Search index
+    store = AzureSearchStore()
+    await store.ensure_index()
     app.state.store = store
     logger.info("DocuMind API started")
 
     yield
 
-    # Disconnect Weaviate
-    await store._client.close()
     logger.info("DocuMind API stopped")
+
 
 app = FastAPI(
     title       = "DocuMind API",
@@ -44,14 +44,16 @@ app = FastAPI(
     lifespan    = lifespan,
 )
 
+origins = ["*"]
 # CORS — allow React frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins     = ["*"],
+    allow_origins     = origins,
     allow_credentials = True,
     allow_methods     = ["*"],
     allow_headers     = ["*"],
 )
+
 # Register routers
 app.include_router(documents_router)
 app.include_router(email_router)

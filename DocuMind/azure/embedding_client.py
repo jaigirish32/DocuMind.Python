@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import asyncio
-from DocuMind.azure.helpers import make_openai_client
+from openai import AsyncAzureOpenAI
 from DocuMind.core.settings import get_settings
 from DocuMind.core.logging.logger import get_logger
 from DocuMind.core.errors.exceptions import EmbeddingError
@@ -9,21 +8,28 @@ from DocuMind.core.errors.exceptions import EmbeddingError
 logger = get_logger(__name__)
 
 BATCH_SIZE = 16
+EMBEDDING_MODEL = "text-embedding-3-small"
+DIMENSIONS = 1536
 
 
 class EmbeddingClient:
-    """Creates embeddings using AsyncAzureOpenAI."""
+    """Creates embeddings using Azure OpenAI text-embedding-3-small."""
 
     def __init__(self) -> None:
-        settings         = get_settings()
-        self._client     = make_openai_client(settings)
+        settings = get_settings()
+        self._client = AsyncAzureOpenAI(
+            azure_endpoint=settings.azure_openai_endpoint,
+            api_key=settings.azure_openai_key,
+            api_version="2024-02-01",
+        )
         self._deployment = settings.azure_openai_embedding_deployment
+        logger.info("Azure embedding client initialized", model=EMBEDDING_MODEL)
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, *args):
-        await self._client.close()
+        pass
 
     async def create_embeddings(
         self,
@@ -32,12 +38,11 @@ class EmbeddingClient:
         if not texts:
             return []
 
-        logger.info("Creating embeddings", total=len(texts))
+        logger.info("Creating embeddings (Azure)", total=len(texts))
 
         embeddings = []
-
         batches = [
-            texts[i : i + BATCH_SIZE]
+            texts[i: i + BATCH_SIZE]
             for i in range(0, len(texts), BATCH_SIZE)
         ]
 
@@ -51,8 +56,8 @@ class EmbeddingClient:
     async def _embed_batch(self, texts: list[str]) -> list[list[float]]:
         try:
             response = await self._client.embeddings.create(
-                input = texts,
-                model = self._deployment,
+                input=texts,
+                model=self._deployment,
             )
             return [item.embedding for item in response.data]
         except Exception as e:
