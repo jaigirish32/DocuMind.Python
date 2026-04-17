@@ -11,7 +11,7 @@ _ENCODING = tiktoken.get_encoding("cl100k_base")
 # Leave room for system prompt, question, and response
 # Total GPT-4o window = 128k, but we keep context lean
 MAX_CONTEXT_TOKENS = 6000
-MAX_QUESTION_TOKENS = 500
+MAX_QUESTION_TOKENS = 200
 
 def count_tokens(text: str) -> int:
     """Return the number of tokens in a string."""

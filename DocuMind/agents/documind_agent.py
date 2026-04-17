@@ -182,6 +182,8 @@ class DocuMindAgent:
 
         validate_question(question)
 
+        has_doc_scope = bool(document_id) or bool(document_ids)
+
         system = SYSTEM_PROMPT
         if document_id:
             system += (
@@ -190,6 +192,14 @@ class DocuMindAgent:
                 f"about another document. Pass document_id='{document_id}' to every "
                 f"search_documents call."
             )
+        # elif document_ids:
+        #     system += (
+        #         f"\n\nIMPORTANT: The user has selected document '{document_ids}'. "
+        #         f"ALWAYS search only this document unless the user explicitly asks "
+        #         f"about another document. Pass document_id='{document_ids}' to every "
+        #         f"search_documents call."
+        #     )
+
 
         trimmed_history = history[-6:] if len(history) > 6 else history
 
@@ -209,12 +219,12 @@ class DocuMindAgent:
 
             active_tools = (
                 [t for t in TOOLS if t["function"]["name"] != "list_documents"]
-                if document_id else TOOLS
+                if has_doc_scope else TOOLS
             )
 
             tool_choice = (
                 {"type": "function", "function": {"name": "search_documents"}}
-                if document_id and iterations == 1
+                if has_doc_scope and iterations == 1
                 else "auto"
             )
 
@@ -350,6 +360,13 @@ class DocuMindAgent:
         query  = args.get("query", "")
         top_k  = min(int(args.get("top_k", self._top_k)), 20)
         doc_id = args.get("document_id") or document_id
+
+        if isinstance(doc_id, list):
+            if len(doc_id) == 1:
+                doc_id = doc_id[0]
+            else:
+                document_ids = doc_id
+                doc_id = None
 
         embeddings = await self._embedder.create_embeddings([query])
         if not embeddings:

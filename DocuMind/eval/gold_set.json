@@ -1,0 +1,92 @@
+[
+  {
+    "id": "q1",
+    "question": "What is the part number for the pressure transducer?",
+    "document_id": "P08-03906-041B_ASSEMBLY__SKID__AM300PIGMF__RE-0043__AS-BUILT__ECN_REQ_FOR_PARTS",
+    "ground_truth_pages": [1],
+    "ground_truth_answer": "80672-004",
+    "category": "specific_value",
+    "answerable": true
+  },
+  {
+    "id": "q2",
+    "question": "List all valves in this assembly with their part numbers",
+    "document_id": "P08-03906-041B_ASSEMBLY__SKID__AM300PIGMF__RE-0043__AS-BUILT__ECN_REQ_FOR_PARTS",
+    "ground_truth_pages": [1],
+    "ground_truth_answer": "10 valves: relief vacuum 80629-003, ball 3-piece 1.5in encapsulated 81345-004, check 3/8in 80692-009, check 1/2in 80692-010, solenoid 80878-005, ball 3-way 81110-001, ball 3/8in 81111-001, ball 1/2in 81111-002, ball 3-piece 1in non-encapsulated 81345-001, needle 81112-001",
+    "category": "listing",
+    "answerable": true
+  },
+  {
+    "id": "q3",
+    "question": "What is the part number for the thermocouple?",
+    "document_id": "P08-03906-041B_ASSEMBLY__SKID__AM300PIGMF__RE-0043__AS-BUILT__ECN_REQ_FOR_PARTS",
+    "ground_truth_pages": [1],
+    "ground_truth_answer": "80573-001",
+    "category": "specific_value",
+    "answerable": true
+  },
+  {
+    "id": "q4",
+    "question": "How many elbow fittings at 90 degrees 1/2 inch NPT are required?",
+    "document_id": "P08-03906-041B_ASSEMBLY__SKID__AM300PIGMF__RE-0043__AS-BUILT__ECN_REQ_FOR_PARTS",
+    "ground_truth_pages": [1],
+    "ground_truth_answer": "7",
+    "category": "specific_value",
+    "answerable": true
+  },
+  {
+    "id": "q5",
+    "question": "What is the part number for the 0-15 PSI gauge?",
+    "document_id": "P08-03906-041B_ASSEMBLY__SKID__AM300PIGMF__RE-0043__AS-BUILT__ECN_REQ_FOR_PARTS",
+    "ground_truth_pages": [1],
+    "ground_truth_answer": "80875-001",
+    "category": "specific_value",
+    "answerable": true
+  },
+  {
+    "id": "q6",
+    "question": "What is the part number for conduit flex 3/4 inch?",
+    "document_id": "P08-03906-041B_ASSEMBLY__SKID__AM300PIGMF__RE-0043__AS-BUILT__ECN_REQ_FOR_PARTS",
+    "ground_truth_pages": [2],
+    "ground_truth_answer": "80997-002",
+    "category": "specific_value",
+    "answerable": true
+  },
+  {
+    "id": "q7",
+    "question": "How many feet of conduit flex 1/2 inch are required?",
+    "document_id": "P08-03906-041B_ASSEMBLY__SKID__AM300PIGMF__RE-0043__AS-BUILT__ECN_REQ_FOR_PARTS",
+    "ground_truth_pages": [2],
+    "ground_truth_answer": "25 FT",
+    "category": "specific_value",
+    "answerable": true
+  },
+  {
+    "id": "q8",
+    "question": "What warranty does the manufacturer provide on this product?",
+    "document_id": "P08-03906-041B_ASSEMBLY__SKID__AM300PIGMF__RE-0043__AS-BUILT__ECN_REQ_FOR_PARTS",
+    "ground_truth_pages": [],
+    "ground_truth_answer": "This information is not available in the retrieved documents.",
+    "category": "unanswerable",
+    "answerable": false
+  },
+  {
+    "id": "q9",
+    "question": "What is the recommended maintenance schedule for this assembly?",
+    "document_id": "P08-03906-041B_ASSEMBLY__SKID__AM300PIGMF__RE-0043__AS-BUILT__ECN_REQ_FOR_PARTS",
+    "ground_truth_pages": [],
+    "ground_truth_answer": "This information is not available in the retrieved documents.",
+    "category": "unanswerable",
+    "answerable": false
+  },
+  {
+    "id": "q10",
+    "question": "What is the part number for the heat trace skid assembly referenced in this drawing?",
+    "document_id": "P08-03906-041B_ASSEMBLY__SKID__AM300PIGMF__RE-0043__AS-BUILT__ECN_REQ_FOR_PARTS",
+    "ground_truth_pages": [2],
+    "ground_truth_answer": "P08-03905-048",
+    "category": "specific_value",
+    "answerable": true
+  }
+]
