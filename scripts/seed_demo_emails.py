@@ -19,7 +19,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from DocuMind.email.models import EmailMessage
 from DocuMind.email.indexer import EmailIndexer
-from DocuMind.bge.embedding_client import EmbeddingClient
+#from DocuMind.bge.embedding_client import EmbeddingClient
+from DocuMind.azure.embedding_client import EmbeddingClient
 from DocuMind.search.factory import create_weaviate_store
 
 

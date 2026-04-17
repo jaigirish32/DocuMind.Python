@@ -2,7 +2,8 @@ import asyncio
 from pathlib import Path
 
 from DocuMind.core.logging.logger import setup_logging
-from DocuMind.bge.embedding_client import EmbeddingClient   # ✅ CHANGED
+#from DocuMind.bge.embedding_client import EmbeddingClient   
+from DocuMind.azure.embedding_client import EmbeddingClient
 from DocuMind.azure.chat_client import ChatClient
 from DocuMind.search.factory import create_weaviate_store
 from DocuMind.agents.documind_agent import DocuMindAgent

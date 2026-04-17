@@ -3,14 +3,14 @@ from __future__ import annotations
 from DocuMind.azure.helpers import make_openai_client
 from DocuMind.core.settings import get_settings
 from DocuMind.core.logging.logger import get_logger
+from langsmith import traceable
 
 logger = get_logger(__name__)
 
 SYSTEM_PROMPT = """You are DocuMind...
 - Financial tables appear in pipe format: "Label: Value | Label: Value"
-
 """
-#Example: "Total revenues: $ | 96,773" means Total revenues = $96,773 million
+
 
 class ChatClient:
     """Sends questions to Azure OpenAI GPT-4o."""
@@ -25,6 +25,27 @@ class ChatClient:
 
     async def __aexit__(self, *args):
         await self._client.close()
+
+    # ── Traceable LLM call — visible in LangSmith ────────────────────────────
+
+    @traceable(name="AzureOpenAI.completion")
+    async def complete(
+        self,
+        messages:    list[dict],
+        tools:       list | None = None,
+        tool_choice: dict | str  = "auto",
+        max_tokens:  int         = 1500,
+    ):
+        return await self._client.chat.completions.create(
+            model       = self._deployment,
+            messages    = messages,
+            tools       = tools,
+            tool_choice = tool_choice,
+            temperature = 0.0,
+            max_tokens  = max_tokens,
+        )
+
+    # ── Existing methods — unchanged ──────────────────────────────────────────
 
     async def ask(
         self,

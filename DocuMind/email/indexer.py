@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from DocuMind.core.logging.logger import get_logger
 from DocuMind.email.models import EmailMessage
-from DocuMind.bge.embedding_client import EmbeddingClient
+#from DocuMind.bge.embedding_client import EmbeddingClient
+from DocuMind.azure.embedding_client import EmbeddingClient
 from DocuMind.search.protocols import VectorStore
 
 logger = get_logger(__name__)

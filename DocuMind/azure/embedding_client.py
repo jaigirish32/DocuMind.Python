@@ -4,6 +4,14 @@ from openai import AsyncAzureOpenAI
 from DocuMind.core.settings import get_settings
 from DocuMind.core.logging.logger import get_logger
 from DocuMind.core.errors.exceptions import EmbeddingError
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+)
+
+from langsmith import traceable
 
 logger = get_logger(__name__)
 
@@ -31,6 +39,7 @@ class EmbeddingClient:
     async def __aexit__(self, *args):
         pass
 
+    @traceable(name="AzureEmbedding.create")
     async def create_embeddings(
         self,
         texts: list[str],
@@ -53,6 +62,12 @@ class EmbeddingClient:
         logger.info("Embeddings created", count=len(embeddings))
         return embeddings
 
+    @retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type(Exception),
+    reraise=True,
+    )
     async def _embed_batch(self, texts: list[str]) -> list[list[float]]:
         try:
             response = await self._client.embeddings.create(
@@ -61,5 +76,5 @@ class EmbeddingClient:
             )
             return [item.embedding for item in response.data]
         except Exception as e:
-            logger.error("Embedding batch failed", error=str(e))
+            logger.warning("Embedding batch failed, will retry", error=str(e))
             raise EmbeddingError(str(e))

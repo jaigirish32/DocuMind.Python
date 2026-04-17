@@ -8,8 +8,8 @@ from DocuMind.core.logging.logger import get_logger
 from DocuMind.core.errors.exceptions import DocumentParseError
 from DocuMind.documents.readers.pdf_reader import PdfReader
 from DocuMind.documents.processing.chunk_builder import ChunkBuilder
-from DocuMind.bge.embedding_client import EmbeddingClient
-#from DocuMind.azure.embedding_client import EmbeddingClient
+#from DocuMind.bge.embedding_client import EmbeddingClient
+from DocuMind.azure.embedding_client import EmbeddingClient
 from DocuMind.search.protocols import VectorStore
 
 logger = get_logger(__name__)
@@ -31,21 +31,12 @@ class DocumentIndexer:
         self._embedder = embedder
         self._store    = store
 
-    def __init__(
-        self,
-        reader:    PdfReader,
-        embedder:  EmbeddingClient,
-        store:     VectorStore,
-    ) -> None:
-        self._reader   = reader
-        self._embedder = embedder
-        self._store    = store
-
     async def index(
         self,
         path:                 Path,
         document_id:          str  | None = None,
         category:             str         = "Others",
+        user_id:     str        = "",
         boilerplate_patterns: list[str]   = None,
     ) -> dict:
         """
@@ -104,6 +95,7 @@ class DocumentIndexer:
         logger.info("Chunks built", count=len(chunks))
         for chunk in chunks:
             chunk.category = category
+            chunk.user_id  = user_id
         logger.info("Category set on chunks", category=category, count=len(chunks))
 
         # Use embedding_text for better retrieval

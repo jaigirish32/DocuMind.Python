@@ -1,6 +1,6 @@
 from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
+from typing import Optional
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -38,9 +38,16 @@ class Settings(BaseSettings):
     # Upload settings
     max_upload_size_mb: int = 5        # change to 0 to disable limit
 
+    langchain_tracing_v2: Optional[str] = None
+    langchain_api_key:    Optional[str] = None
+    langchain_project:    Optional[str] = None
+
     # App
     app_env: str = "development"
     log_level: str = "INFO"
+
+    secret_key: str = "changeme"
+    
 
     @property
     def is_development(self) -> bool:
@@ -50,3 +57,13 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+def get_users(self) -> dict[str, str]:
+    """Returns {username: password} dict"""
+    result = {}
+    for pair in self.users.split(","):
+        pair = pair.strip()
+        if ":" in pair:
+            username, password = pair.split(":", 1)
+            result[username.strip()] = password.strip()
+    return result

@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 
-from DocuMind.bge.embedding_client import EmbeddingClient
 from DocuMind.azure.chat_client import ChatClient
 from DocuMind.core.logging.logger import get_logger
 from DocuMind.search.protocols import VectorStore
+from DocuMind.core.token_counter import validate_question, truncate_chunks_to_limit
+from DocuMind.core.reranker import mmr_rerank
+from langsmith import traceable
 
 logger = get_logger(__name__)
 
-MAX_ITERATIONS = 8
+MAX_ITERATIONS = 5
 
 TOOLS = [
     {
@@ -101,9 +104,24 @@ Rules:
 - For email/communication questions → use search_emails
 - For questions that could involve both → use BOTH tools and combine the results
 - If someone asks about what a person said or communicated → use search_emails
-- Cite page numbers for documents and sender/date for emails.
 - If search returns nothing relevant, say so honestly.
 - Financial tables appear in pipe format: "Label: value1 | value2 | value3"
+
+Citation rules:
+- Each search result contains a "page" field — use it to cite sources.
+- At the end of your answer always write: Sources: page X
+- ONLY cite the page numbers that DIRECTLY contain the information you used.
+- If answer came from page 4 only → write Sources: page 4
+- If answer came from pages 1 and 4 → write Sources: pages 1, 4
+- Do NOT cite pages that were retrieved but not used in your answer.
+- Never cite more than 3 pages unless the answer truly spans all of them.
+- NEVER approximate or estimate values not explicitly
+  stated in the retrieved chunks.
+- If a specific value is not found in the search results,
+  say exactly: "This information is not available in
+  the retrieved documents."
+- Do not use phrases like "approximately", "based on context",
+  or "estimated" — these indicate hallucination.
 """
 
 
@@ -127,11 +145,11 @@ class DocuMindAgent:
 
     def __init__(
         self,
-        embedder:         EmbeddingClient,
+        embedder:         object,
         chat:             ChatClient,
         store:            VectorStore,
-        top_k:            int   = 20,
-        mmr_top_k:        int   = 10,
+        top_k:            int   = 10,
+        mmr_top_k:        int   = 5,
         mmr_diversity:    float = 0.5,
         min_chunk_length: int   = 80,
         max_tokens:       int   = 1500,
@@ -145,38 +163,50 @@ class DocuMindAgent:
         self._min_chunk_length = min_chunk_length
         self._max_tokens       = max_tokens
 
+    # ── Public ────────────────────────────────────────────────────────────────
+
     async def ask(self, question: str, document_id: str | None = None) -> str:
         result = await self.ask_structured(question, document_id)
         return result.answer
 
+    @traceable(name="DocuMind.ask")
     async def ask_structured(
         self,
-        question:    str,
-        document_id: str | None = None,
+        question:     str,
+        document_id:  str | None = None,
         document_ids: list[str] | None = None,
-        history:     list[dict] = [],
+        history:      list[dict] = [],
+        user_id:      str | None = None,        # ← ADDED
     ) -> AskResult:
-        logger.info("Agent question", question=question[:80])
+        logger.info("Agent question", question=question[:80], user_id=user_id)
+
+        validate_question(question)
 
         system = SYSTEM_PROMPT
         if document_id:
-            system += f"\n\nIMPORTANT: The user has selected document '{document_id}'. ALWAYS search only this document unless the user explicitly asks about another document. Pass document_id='{document_id}' to every search_documents call."
+            system += (
+                f"\n\nIMPORTANT: The user has selected document '{document_id}'. "
+                f"ALWAYS search only this document unless the user explicitly asks "
+                f"about another document. Pass document_id='{document_id}' to every "
+                f"search_documents call."
+            )
+
+        trimmed_history = history[-6:] if len(history) > 6 else history
 
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            *history,
+            {"role": "system", "content": system},
+            *trimmed_history,
             {"role": "user",   "content": question},
         ]
 
         tool_call_log: list[dict] = []
-        source_pages:  list[int]  = []
+        all_chunks:    list[dict] = []
         iterations = 0
 
         while iterations < MAX_ITERATIONS:
             iterations += 1
             logger.info("Agent iteration", n=iterations)
 
-            # When document is selected — remove list_documents tool
             active_tools = (
                 [t for t in TOOLS if t["function"]["name"] != "list_documents"]
                 if document_id else TOOLS
@@ -188,12 +218,10 @@ class DocuMindAgent:
                 else "auto"
             )
 
-            response = await self._chat._client.chat.completions.create(
-                model       = self._chat._deployment,
+            response = await self._chat.complete(
                 messages    = messages,
                 tools       = TOOLS,
                 tool_choice = tool_choice,
-                temperature = 0.0,
                 max_tokens  = self._max_tokens,
             )
 
@@ -201,10 +229,14 @@ class DocuMindAgent:
             messages.append(msg.model_dump(exclude_unset=True))
 
             if not msg.tool_calls:
-                logger.info("Agent done", iterations=iterations, pages=source_pages)
+                cited_pages = self._extract_cited_pages(
+                    msg.content or "",
+                    all_chunks,
+                )
+                logger.info("Agent done", iterations=iterations, pages=cited_pages)
                 return AskResult(
                     answer       = msg.content or "",
-                    source_pages = sorted(set(source_pages)),
+                    source_pages = cited_pages,
                     query_type   = QueryType.ANALYTICAL,
                     tool_calls   = tool_call_log,
                 )
@@ -214,7 +246,11 @@ class DocuMindAgent:
                 args = json.loads(tc.function.arguments or "{}")
                 logger.info("Tool call", tool=fn, args=args)
 
-                tool_result = await self._execute_tool(fn, args, document_id,document_ids, source_pages)
+                tool_result, retrieved_chunks = await self._execute_tool(
+                    fn, args, document_id, document_ids,
+                    user_id = user_id,              # ← ADDED
+                )
+                all_chunks.extend(retrieved_chunks)
                 tool_call_log.append({"tool": fn, "args": args})
 
                 messages.append({
@@ -226,47 +262,98 @@ class DocuMindAgent:
         logger.warning("Max iterations reached")
         return AskResult(
             answer       = "Could not produce an answer within the iteration limit.",
-            source_pages = sorted(set(source_pages)),
+            source_pages = [],
             query_type   = QueryType.ANALYTICAL,
             tool_calls   = tool_call_log,
         )
 
-    # ── Tool implementations ──────────────────────────────────────────────────
+    # ── Private helpers ───────────────────────────────────────────────────────
+
+    def _extract_cited_pages(
+        self,
+        answer:     str,
+        all_chunks: list[dict],
+    ) -> list[int]:
+        cited = []
+
+        patterns = [
+            r'[Ss]ources?:\s*pages?\s*([\d,\s]+)',
+            r'\bpages?\s+(\d+(?:\s*,\s*\d+)*)',
+            r'\bpages?\s+(\d+)\s+and\s+(\d+)',
+            r'\bp\.(\d+)\b',
+        ]
+
+        for pattern in patterns:
+            matches = re.findall(pattern, answer)
+            for match in matches:
+                if isinstance(match, tuple):
+                    for m in match:
+                        for num in re.findall(r'\d+', str(m)):
+                            cited.append(int(num))
+                else:
+                    for num in re.findall(r'\d+', match):
+                        cited.append(int(num))
+
+        if cited:
+            return sorted(set(cited))
+
+        if all_chunks:
+            best = max(all_chunks, key=lambda c: c.get("score", 0))
+            p = best.get("page_number")
+            if p is not None:
+                return [p]
+
+        return []
+
+    # ── Tool router ───────────────────────────────────────────────────────────
 
     async def _execute_tool(
-    self,
-    fn:           str,
-    args:         dict,
-    document_id:  str | None,
-    document_ids: list[str] | None,
-    source_pages: list[int],
-) -> str:
+        self,
+        fn:           str,
+        args:         dict,
+        document_id:  str | None,
+        document_ids: list[str] | None,
+        user_id:      str | None = None,        # ← ADDED
+    ) -> tuple[str, list[dict]]:
         if fn == "search_documents":
-            return await self._tool_search_documents(args, document_id, document_ids,source_pages)
+            return await self._tool_search_documents(
+                args, document_id, document_ids,
+                user_id = user_id,              # ← ADDED
+            )
         if fn == "search_emails":
-            return await self._tool_search_emails(args)
+            result = await self._tool_search_emails(
+                args,
+                user_id = user_id,              # ← ADDED
+            )
+            return result, []
         if fn == "list_documents":
             if document_id:
-                # When document is selected — don't list all docs, search selected one
                 args["query"] = "overview contents summary"
-                return await self._tool_search_documents(args, document_id, document_ids,source_pages)
-            return await self._tool_list()
-        return json.dumps({"error": f"Unknown tool: {fn}"})
+                return await self._tool_search_documents(
+                    args, document_id, document_ids,
+                    user_id = user_id,          # ← ADDED
+                )
+            result = await self._tool_list(user_id=user_id)  # ← ADDED
+            return result, []
+        return json.dumps({"error": f"Unknown tool: {fn}"}), []
 
+    # ── Tool implementations ──────────────────────────────────────────────────
+
+    @traceable(name="search_documents")
     async def _tool_search_documents(
         self,
         args:         dict,
         document_id:  str | None,
         document_ids: list[str] | None,
-        source_pages: list[int],
-    ) -> str:
+        user_id:      str | None = None,        # ← ADDED
+    ) -> tuple[str, list[dict]]:
         query  = args.get("query", "")
-        top_k  = min(int(args.get("top_k", 10)), 20)
+        top_k  = min(int(args.get("top_k", self._top_k)), 20)
         doc_id = args.get("document_id") or document_id
 
         embeddings = await self._embedder.create_embeddings([query])
         if not embeddings:
-            return json.dumps({"results": [], "message": "Embedding failed."})
+            return json.dumps({"results": [], "message": "Embedding failed."}), []
 
         chunks = await self._store.hybrid_search(
             query        = query,
@@ -274,6 +361,7 @@ class DocuMindAgent:
             top_k        = top_k,
             document_id  = doc_id,
             document_ids = document_ids if not doc_id else None,
+            user_id      = user_id,             # ← ADDED
         )
 
         chunks = [
@@ -281,24 +369,36 @@ class DocuMindAgent:
             if len(c.get("content", "")) >= self._min_chunk_length
         ]
 
-        for c in chunks:
-            p = c.get("page_number")
-            if p is not None:
-                source_pages.append(p)
+        chunk_embeddings = [c.get("embedding", []) for c in chunks]
+
+        chunks = mmr_rerank(
+            query_embedding  = embeddings[0],
+            chunks           = chunks,
+            chunk_embeddings = chunk_embeddings,
+            top_k            = self._mmr_top_k,
+            diversity        = self._mmr_diversity,
+        )
+
+        chunks = truncate_chunks_to_limit(chunks)
 
         results = [
             {
                 "page":   c.get("page_number"),
                 "text":   c.get("content", ""),
                 "doc_id": c.get("document_id", ""),
+                "score":  c.get("score", 0),
             }
             for c in chunks
         ]
 
         logger.info("search_documents", returned=len(results))
-        return json.dumps({"results": results})
+        return json.dumps({"results": results}), chunks
 
-    async def _tool_search_emails(self, args: dict) -> str:
+    async def _tool_search_emails(
+        self,
+        args:    dict,
+        user_id: str | None = None,             # ← ADDED
+    ) -> str:
         query = args.get("query", "")
         top_k = min(int(args.get("top_k", 10)), 20)
 
@@ -310,11 +410,17 @@ class DocuMindAgent:
             query     = query,
             embedding = embeddings[0],
             top_k     = top_k,
+            user_id   = user_id,                # ← ADDED
         )
 
         logger.info("search_emails", returned=len(results))
         return json.dumps({"results": results})
 
-    async def _tool_list(self) -> str:
-        docs = await self._store.list_documents()
+    async def _tool_list(
+        self,
+        user_id: str | None = None,             # ← ADDED
+    ) -> str:
+        docs = await self._store.list_documents(
+            user_id = user_id,                  # ← ADDED
+        )
         return json.dumps({"documents": docs})

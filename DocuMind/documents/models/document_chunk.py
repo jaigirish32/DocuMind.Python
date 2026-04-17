@@ -14,5 +14,6 @@ class DocumentChunk:
     embedding_text: str = ""
     source:         str = ""
     category:       str = "Others"
+    user_id:         str = ""
     upload_date:    datetime = field(
         default_factory=lambda: datetime.now(timezone.utc))

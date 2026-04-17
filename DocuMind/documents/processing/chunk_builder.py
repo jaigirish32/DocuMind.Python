@@ -64,8 +64,6 @@ class ChunkBuilder:
         for page in document.pages:
             for raw_block in page.blocks:
 
-                text = raw_block.text.strip()
-
                 # Clean block text — remove boilerplate lines
                 text = self._clean_block_text(raw_block.text)
 
@@ -186,7 +184,7 @@ class ChunkBuilder:
             # Skip line if it matches any boilerplate pattern
             if self._is_boilerplate_line(line):
                 continue
-        clean_lines.append(line)
+            clean_lines.append(line)
         return "\n".join(clean_lines)
     
     def _is_boilerplate_line(self, line: str) -> bool:
