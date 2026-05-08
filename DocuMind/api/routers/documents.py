@@ -38,10 +38,23 @@ class AskRequest(BaseModel):
     history:      list[dict] = []
 
 
+class Citation(BaseModel):
+    chunk_id: str
+    quote:    str
+    page:     int | None = None
+    doc_id:   str | None = None
+
+
 class AskResponse(BaseModel):
     answer:       str
-    source_pages: list[int]
-    document_id:  str | None
+    citations:    list[Citation] = []
+    source_pages: list[int]      = []
+    document_id:  str | None     = None
+
+
+class DeleteResponse(BaseModel):
+    success:     bool
+    document_id: str
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -79,7 +92,8 @@ async def upload_document(
     await file.seek(0)
 
     document_id = re.sub(r"[^a-zA-Z0-9_-]", "_", Path(file.filename).stem)
-    tmp_path    = Path(tempfile.gettempdir()) / file.filename
+    # Use user_id + document_id to prevent tmp-file collisions across concurrent uploads
+    tmp_path    = Path(tempfile.gettempdir()) / f"{user_id}_{document_id}.pdf"
 
     try:
         async with aiofiles.open(tmp_path, "wb") as f:
@@ -142,6 +156,7 @@ async def ask_question(
 
     return AskResponse(
         answer       = result.answer,
+        citations    = result.citations,
         source_pages = result.source_pages,
         document_id  = body.document_id,
     )
@@ -156,6 +171,33 @@ async def list_documents(
     user_id = str(user["id"])
     docs    = await request.app.state.store.list_documents(user_id=user_id)
     return {"documents": docs}
+
+
+@router.delete("/documents/{document_id}", response_model=DeleteResponse)
+@limiter.limit("30/minute")
+async def delete_document(
+    request:     Request,
+    document_id: str,
+    user:        dict = Depends(get_current_user),
+):
+    """
+    Delete a document and all its chunks.
+
+    Scoped to current user — the store's delete_document filters by both
+    documentId AND userId, so users can never delete each other's docs.
+    Idempotent: succeeds even if the document doesn't exist (or never belonged
+    to this user) — no information leak.
+    """
+    user_id = str(user["id"])
+    logger.info("Delete document request",
+                document_id=document_id, user_id=user_id)
+
+    await request.app.state.store.delete_document(
+        document_id = document_id,
+        user_id     = user_id,
+    )
+
+    return DeleteResponse(success=True, document_id=document_id)
 
 
 @router.get("/health")

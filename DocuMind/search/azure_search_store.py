@@ -220,7 +220,7 @@ class AzureSearchStore:
                 filter         = filter_expr,
                 top            = top_k,
                 select         = [
-                    "documentId", "documentName",
+                    "chunkId","documentId", "documentName",
                     "category", "pageNumber", "content",
                 ],
             )
@@ -228,6 +228,7 @@ class AzureSearchStore:
             chunks = []
             async for result in results:
                 chunks.append({
+                    "chunk_id":      result["chunkId"],
                     "document_id":   result["documentId"],
                     "document_name": result["documentName"],
                     "category":      result.get("category", "Others"),

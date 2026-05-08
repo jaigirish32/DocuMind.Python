@@ -103,25 +103,32 @@ Rules:
 - For document questions → use search_documents
 - For email/communication questions → use search_emails
 - For questions that could involve both → use BOTH tools and combine the results
-- If someone asks about what a person said or communicated → use search_emails
 - If search returns nothing relevant, say so honestly.
 - Financial tables appear in pipe format: "Label: value1 | value2 | value3"
 
+OUTPUT FORMAT — CRITICAL:
+Return your response as valid JSON with exactly this structure:
+{
+  "answer": "your answer text here, in plain prose, no citation markers inside",
+  "citations": [
+    {
+      "chunk_id": "exact chunk_id from search results",
+      "quote": "exact substring from that chunk's text that supports your answer"
+    }
+  ]
+}
+
 Citation rules:
-- Each search result contains a "page" field — use it to cite sources.
-- At the end of your answer always write: Sources: page X
-- ONLY cite the page numbers that DIRECTLY contain the information you used.
-- If answer came from page 4 only → write Sources: page 4
-- If answer came from pages 1 and 4 → write Sources: pages 1, 4
-- Do NOT cite pages that were retrieved but not used in your answer.
-- Never cite more than 3 pages unless the answer truly spans all of them.
-- NEVER approximate or estimate values not explicitly
-  stated in the retrieved chunks.
-- If a specific value is not found in the search results,
-  say exactly: "This information is not available in
-  the retrieved documents."
-- Do not use phrases like "approximately", "based on context",
-  or "estimated" — these indicate hallucination.
+- Every factual claim in your answer MUST be supported by at least one citation.
+- chunk_id MUST match exactly one chunk_id from the search results you received.
+- quote MUST be a verbatim substring (15-200 characters) from that chunk's text field.
+- Do NOT invent chunk_ids. Do NOT paraphrase quotes.
+- If the answer isn't in the retrieved chunks, respond with:
+  {"answer": "This information is not available in the retrieved documents.", "citations": []}
+- Do NOT use phrases like "approximately", "based on context", or "estimated" — these indicate hallucination.
+
+Do NOT wrap the JSON in markdown code blocks. Do NOT add any text before or after the JSON.
+Return ONLY the JSON object.
 """
 
 
@@ -134,6 +141,7 @@ class AskResult:
     answer:       str
     source_pages: list[int]
     query_type:   QueryType
+    citations:    list[dict] = field(default_factory=list)
     tool_calls:   list[dict] = field(default_factory=list)
 
 
@@ -176,7 +184,7 @@ class DocuMindAgent:
         document_id:  str | None = None,
         document_ids: list[str] | None = None,
         history:      list[dict] = [],
-        user_id:      str | None = None,        # ← ADDED
+        user_id:      str | None = None,
     ) -> AskResult:
         logger.info("Agent question", question=question[:80], user_id=user_id)
 
@@ -192,14 +200,6 @@ class DocuMindAgent:
                 f"about another document. Pass document_id='{document_id}' to every "
                 f"search_documents call."
             )
-        # elif document_ids:
-        #     system += (
-        #         f"\n\nIMPORTANT: The user has selected document '{document_ids}'. "
-        #         f"ALWAYS search only this document unless the user explicitly asks "
-        #         f"about another document. Pass document_id='{document_ids}' to every "
-        #         f"search_documents call."
-        #     )
-
 
         trimmed_history = history[-6:] if len(history) > 6 else history
 
@@ -239,14 +239,33 @@ class DocuMindAgent:
             messages.append(msg.model_dump(exclude_unset=True))
 
             if not msg.tool_calls:
-                cited_pages = self._extract_cited_pages(
+                # LLM returned its final answer — should be JSON per system prompt.
+                answer, citations = self._parse_llm_response(
                     msg.content or "",
                     all_chunks,
                 )
-                logger.info("Agent done", iterations=iterations, pages=cited_pages)
+
+                # Pages are derived from citations directly — no regex needed.
+                cited_pages = sorted({
+                    c["page"] for c in citations
+                    if c.get("page") is not None
+                })
+
+                # Fallback: if the LLM didn't return clean JSON or citations,
+                # try the legacy regex extractor on the raw answer text.
+                if not cited_pages:
+                    cited_pages = self._extract_cited_pages(answer, all_chunks)
+
+                logger.info(
+                    "Agent done",
+                    iterations=iterations,
+                    pages=cited_pages,
+                    citations_count=len(citations),
+                )
                 return AskResult(
-                    answer       = msg.content or "",
+                    answer       = answer,
                     source_pages = cited_pages,
+                    citations    = citations,
                     query_type   = QueryType.ANALYTICAL,
                     tool_calls   = tool_call_log,
                 )
@@ -258,7 +277,7 @@ class DocuMindAgent:
 
                 tool_result, retrieved_chunks = await self._execute_tool(
                     fn, args, document_id, document_ids,
-                    user_id = user_id,              # ← ADDED
+                    user_id = user_id,
                 )
                 all_chunks.extend(retrieved_chunks)
                 tool_call_log.append({"tool": fn, "args": args})
@@ -273,24 +292,88 @@ class DocuMindAgent:
         return AskResult(
             answer       = "Could not produce an answer within the iteration limit.",
             source_pages = [],
+            citations    = [],
             query_type   = QueryType.ANALYTICAL,
             tool_calls   = tool_call_log,
         )
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
+    def _parse_llm_response(
+        self,
+        content:    str,
+        all_chunks: list[dict],
+    ) -> tuple[str, list[dict]]:
+        """
+        Parse the LLM's structured JSON response.
+        Returns (answer_text, citations_with_resolved_pages).
+
+        Falls back gracefully if the LLM didn't return valid JSON —
+        returns content as plain text with empty citations.
+        """
+        if not content:
+            return "", []
+
+        cleaned = content.strip()
+
+        # Strip markdown code fences if the LLM ignored instructions
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+            cleaned = re.sub(r"\s*```$", "", cleaned)
+            cleaned = cleaned.strip()
+
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError:
+            logger.warning(
+                "LLM did not return valid JSON; treating as plain text",
+                preview=cleaned[:200],
+            )
+            return content, []
+
+        if not isinstance(data, dict):
+            return content, []
+
+        answer        = data.get("answer", "") or ""
+        raw_citations = data.get("citations", []) or []
+
+        # Build a chunk_id → chunk lookup to resolve page numbers + doc IDs
+        chunk_lookup = {
+            c.get("chunk_id"): c
+            for c in all_chunks
+            if c.get("chunk_id")
+        }
+
+        citations: list[dict] = []
+        for c in raw_citations:
+            if not isinstance(c, dict):
+                continue
+            chunk_id = c.get("chunk_id", "")
+            quote    = c.get("quote", "")
+            chunk    = chunk_lookup.get(chunk_id, {})
+
+            citations.append({
+                "chunk_id": chunk_id,
+                "quote":    quote,
+                "page":     chunk.get("page_number"),
+                "doc_id":   chunk.get("document_id"),
+            })
+
+        return answer, citations
+
     def _extract_cited_pages(
         self,
         answer:     str,
         all_chunks: list[dict],
     ) -> list[int]:
+        """Legacy regex-based page extractor — used only as a fallback."""
         cited = []
 
         patterns = [
-            r'[Ss]ources?:\s*pages?\s*([\d,\s]+)',
-            r'\bpages?\s+(\d+(?:\s*,\s*\d+)*)',
-            r'\bpages?\s+(\d+)\s+and\s+(\d+)',
-            r'\bp\.(\d+)\b',
+            r"[Ss]ources?:\s*pages?\s*([\d,\s]+)",
+            r"\bpages?\s+(\d+(?:\s*,\s*\d+)*)",
+            r"\bpages?\s+(\d+)\s+and\s+(\d+)",
+            r"\bp\.(\d+)\b",
         ]
 
         for pattern in patterns:
@@ -298,10 +381,10 @@ class DocuMindAgent:
             for match in matches:
                 if isinstance(match, tuple):
                     for m in match:
-                        for num in re.findall(r'\d+', str(m)):
+                        for num in re.findall(r"\d+", str(m)):
                             cited.append(int(num))
                 else:
-                    for num in re.findall(r'\d+', match):
+                    for num in re.findall(r"\d+", match):
                         cited.append(int(num))
 
         if cited:
@@ -323,17 +406,17 @@ class DocuMindAgent:
         args:         dict,
         document_id:  str | None,
         document_ids: list[str] | None,
-        user_id:      str | None = None,        # ← ADDED
+        user_id:      str | None = None,
     ) -> tuple[str, list[dict]]:
         if fn == "search_documents":
             return await self._tool_search_documents(
                 args, document_id, document_ids,
-                user_id = user_id,              # ← ADDED
+                user_id = user_id,
             )
         if fn == "search_emails":
             result = await self._tool_search_emails(
                 args,
-                user_id = user_id,              # ← ADDED
+                user_id = user_id,
             )
             return result, []
         if fn == "list_documents":
@@ -341,9 +424,9 @@ class DocuMindAgent:
                 args["query"] = "overview contents summary"
                 return await self._tool_search_documents(
                     args, document_id, document_ids,
-                    user_id = user_id,          # ← ADDED
+                    user_id = user_id,
                 )
-            result = await self._tool_list(user_id=user_id)  # ← ADDED
+            result = await self._tool_list(user_id=user_id)
             return result, []
         return json.dumps({"error": f"Unknown tool: {fn}"}), []
 
@@ -355,7 +438,7 @@ class DocuMindAgent:
         args:         dict,
         document_id:  str | None,
         document_ids: list[str] | None,
-        user_id:      str | None = None,        # ← ADDED
+        user_id:      str | None = None,
     ) -> tuple[str, list[dict]]:
         query  = args.get("query", "")
         top_k  = min(int(args.get("top_k", self._top_k)), 20)
@@ -378,7 +461,7 @@ class DocuMindAgent:
             top_k        = top_k,
             document_id  = doc_id,
             document_ids = document_ids if not doc_id else None,
-            user_id      = user_id,             # ← ADDED
+            user_id      = user_id,
         )
 
         chunks = [
@@ -400,6 +483,7 @@ class DocuMindAgent:
 
         results = [
             {
+                "chunk_id": c.get("chunk_id", ""),
                 "page":   c.get("page_number"),
                 "text":   c.get("content", ""),
                 "doc_id": c.get("document_id", ""),
@@ -414,7 +498,7 @@ class DocuMindAgent:
     async def _tool_search_emails(
         self,
         args:    dict,
-        user_id: str | None = None,             # ← ADDED
+        user_id: str | None = None,
     ) -> str:
         query = args.get("query", "")
         top_k = min(int(args.get("top_k", 10)), 20)
@@ -427,7 +511,7 @@ class DocuMindAgent:
             query     = query,
             embedding = embeddings[0],
             top_k     = top_k,
-            user_id   = user_id,                # ← ADDED
+            user_id   = user_id,
         )
 
         logger.info("search_emails", returned=len(results))
@@ -435,9 +519,9 @@ class DocuMindAgent:
 
     async def _tool_list(
         self,
-        user_id: str | None = None,             # ← ADDED
+        user_id: str | None = None,
     ) -> str:
         docs = await self._store.list_documents(
-            user_id = user_id,                  # ← ADDED
+            user_id = user_id,
         )
         return json.dumps({"documents": docs})

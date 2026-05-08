@@ -14,7 +14,7 @@ async def init_db() -> None:
     """
     Create the database and users table if they don't exist.
     Called once on server startup.
-    
+
     aiosqlite is async SQLite — works with FastAPI's async model.
     Regular sqlite3 would BLOCK the event loop during DB operations.
     aiosqlite runs DB operations in a thread pool — non-blocking.
@@ -26,18 +26,38 @@ async def init_db() -> None:
                 username      TEXT    UNIQUE NOT NULL,
                 email         TEXT    UNIQUE NOT NULL,
                 password_hash TEXT    NOT NULL,
+                company       TEXT    NOT NULL DEFAULT '-',
                 created_at    TEXT    DEFAULT (datetime('now'))
             )
         """)
         await db.commit()
+
+        # Safety net: if an older DB already exists without `company`,
+        # add it idempotently. New installations skip this branch.
+        await _ensure_company_column(db)
+
         logger.info("Database initialized", path=str(DB_PATH))
+
+
+async def _ensure_company_column(db: aiosqlite.Connection) -> None:
+    """Add company column if missing. Safe to call on every startup."""
+    cursor = await db.execute("PRAGMA table_info(users)")
+    rows = await cursor.fetchall()
+    columns = [row[1] for row in rows]
+
+    if "company" not in columns:
+        logger.info("Adding missing company column to users table")
+        await db.execute(
+            "ALTER TABLE users ADD COLUMN company TEXT NOT NULL DEFAULT '-'"
+        )
+        await db.commit()
 
 
 async def get_db() -> aiosqlite.Connection:
     """
     Get a database connection.
     Used as a FastAPI dependency in route handlers.
-    
+
     Usage in routes:
         async def my_route(db = Depends(get_db)):
             ...

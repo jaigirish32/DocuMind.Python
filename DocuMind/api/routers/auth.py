@@ -3,7 +3,7 @@ from __future__ import annotations
 import aiosqlite
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 from DocuMind.core.auth.database import get_db
 from DocuMind.core.auth.service import register_user, login_user, get_user_by_id
@@ -21,6 +21,7 @@ class RegisterRequest(BaseModel):
     username: str
     email:    EmailStr
     password: str
+    company:  str = Field(..., min_length=1, max_length=100)
 
 
 class LoginRequest(BaseModel):
@@ -32,6 +33,7 @@ class AuthResponse(BaseModel):
     token:    str
     user_id:  int
     username: str
+    company:  str
 
 
 # ── Dependency — use in any protected route ───────────────────────────────────
@@ -78,11 +80,18 @@ async def register(
             detail="Password must be at least 6 characters"
         )
 
+    if not request.company.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Company name is required"
+        )
+
     user = await register_user(
         db       = db,
         username = request.username,
         email    = request.email,
         password = request.password,
+        company  = request.company,
     )
 
     if not user:
@@ -92,7 +101,12 @@ async def register(
         )
 
     token = create_token(user["id"], user["username"])
-    return AuthResponse(token=token, user_id=user["id"], username=user["username"])
+    return AuthResponse(
+        token    = token,
+        user_id  = user["id"],
+        username = user["username"],
+        company  = user["company"],
+    )
 
 
 @router.post("/login", response_model=AuthResponse)
@@ -117,7 +131,12 @@ async def login(
         )
 
     token = create_token(user["id"], user["username"])
-    return AuthResponse(token=token, user_id=user["id"], username=user["username"])
+    return AuthResponse(
+        token    = token,
+        user_id  = user["id"],
+        username = user["username"],
+        company  = user["company"],
+    )
 
 
 @router.get("/me")
